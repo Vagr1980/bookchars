@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createClient as createSupabase } from '@supabase/supabase-js'
 import { generateAvatarPrompt } from '@/lib/claude'
 import { generateCharacterAvatar, uploadAvatarToStorage } from '@/lib/gemini'
+
+function getAdminClient() {
+  return createSupabase(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+}
 
 export const maxDuration = 30
 
@@ -13,7 +20,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'character_id обязателен' }, { status: 400 })
     }
 
-    const supabase = createClient()
+    const supabase = getAdminClient()
 
     // ── 1. Получаем персонажа ─────────────────────────────────────────────────
     const { data: character, error } = await supabase
