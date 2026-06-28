@@ -90,6 +90,8 @@ const RUSSIAN_CLASSICS = [
   { id: 'ru_oblomov',      title: 'Обломов',                 author: 'Иван Гончаров',     source: 'libru', textAvailable: true, libUrl: 'http://lib.ru/LITRA/GONCHAROW/oblomow.txt',        keywords: ['обломов', 'oblomov', 'гончаров', 'goncharov'] },
   // Лермонтов
   { id: 'ru_geroi',        title: 'Герой нашего времени',    author: 'Михаил Лермонтов',  source: 'libru', textAvailable: true, libUrl: 'http://lib.ru/LITRA/LERMONTOW/geroj.txt',          keywords: ['герой', 'нашего', 'времени', 'hero of our time', 'лермонтов', 'lermontov'] },
+  // Ершов
+  { id: 'ru_konek',        title: 'Конёк-горбунок',          author: 'Пётр Ершов',        source: 'wikisource', textAvailable: true, pageTitle: 'Конёк-горбунок (Ершов)/1868 (ВТ)',        keywords: ['конёк', 'горбунок', 'konek', 'ершов', 'ershov'] },
   // Горький
   { id: 'ru_na_dne',       title: 'На дне',                  author: 'Максим Горький',    source: 'libru', textAvailable: true, libUrl: 'http://lib.ru/LITRA/GORKIJ/na_dne.txt',            keywords: ['на дне', 'lower depths', 'горький', 'gorky'] },
   // Островский

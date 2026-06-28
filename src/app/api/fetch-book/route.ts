@@ -138,31 +138,45 @@ async function wikisourceJson(url: string): Promise<any> {
   try { return JSON.parse(text) } catch { return null }
 }
 
+// Clean raw wikitext into readable plain text
+function cleanWikitext(raw: string): string {
+  let text = raw
+  // Skip redirect pages entirely
+  if (/^#(REDIRECT|ПЕРЕНАПРАВЛЕНИЕ)/i.test(text.trim())) return ''
+  // Remove <noinclude>…</noinclude> metadata blocks
+  text = text.replace(/<noinclude>[\s\S]*?<\/noinclude>/gi, '')
+  // Remove <ref>…</ref> footnotes
+  text = text.replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
+  text = text.replace(/<ref[^>]*\/>/gi, '')
+  // Remove HTML comments
+  text = text.replace(/<!--[\s\S]*?-->/g, '')
+  // Strip nested templates {{…}} (up to 5 passes for nesting depth)
+  for (let i = 0; i < 5; i++) text = text.replace(/\{\{[^{}]*\}\}/g, '')
+  // Wiki links [[Target|Label]] → Label, or [[Target]] → Target
+  text = text.replace(/\[\[(?:[^|\]]+\|)?([^\]]+)\]\]/g, '$1')
+  // External links [url text] → text, [url] → ''
+  text = text.replace(/\[https?:\/\/[^\s\]]+\s+([^\]]+)\]/g, '$1')
+  text = text.replace(/\[https?:\/\/[^\s\]]+\]/g, '')
+  // Section headers == Heading == → newline + heading + newline
+  text = text.replace(/={2,}\s*([^=\n]+?)\s*={2,}/g, '\n\n$1\n\n')
+  // Remove remaining HTML tags
+  text = text.replace(/<[^>]+>/g, '')
+  // Decode HTML entities
+  text = text
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+  // Collapse whitespace
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{4,}/g, '\n\n\n').trim()
+  return text
+}
+
 async function fetchWikisourcePage(title: string): Promise<string> {
-  const url = `https://ru.wikisource.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=text&format=json&origin=*`
+  // Use wikitext — much cleaner than HTML (no nested-div nightmare)
+  const url = `https://ru.wikisource.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=wikitext&redirects=1&format=json&origin=*`
   const data = await wikisourceJson(url)
-  if (!data?.parse?.text?.['*']) return ''
-  let html = data.parse.text['*'] as string
-
-  // Slice to start of main content (don't use regex to find closing tag — nested divs break it)
-  const mainIdx = html.indexOf('mw-parser-output')
-  if (mainIdx !== -1) {
-    const tagEnd = html.indexOf('>', mainIdx)
-    if (tagEnd !== -1) html = html.slice(tagEnd + 1)
-  }
-
-  // Remove tables (navigation, infoboxes), sidebars, edit links, categories
-  html = html
-    .replace(/<table[\s\S]*?<\/table>/gi, '')
-    .replace(/<div[^>]*class="[^"]*(navbox|navigation|toc|reflist|sister|noprint|mw-editsection|thumb|hatnote|ws-noexport|catlinks)[^"]*"[\s\S]*?<\/div>/gi, '')
-    .replace(/<span[^>]*class="[^"]*mw-editsection[^"]*"[\s\S]*?<\/span>/gi, '')
-    .replace(/<ul[^>]*class="[^"]*gallery[^"]*"[\s\S]*?<\/ul>/gi, '')
-    .replace(/<div[^>]*id="catlinks"[\s\S]*$/i, '')
-
-  // Cut off at references/external links sections
-  html = html.replace(/<h2[\s\S]*?(Ссылки|Примечания|Литература|Внешние ссылки|See also|Notes|References|External)[\s\S]*$/i, '')
-
-  return stripHtml(html)
+  if (!data?.parse?.wikitext?.['*']) return ''
+  return cleanWikitext(data.parse.wikitext['*'] as string)
 }
 
 async function fetchWikisourceText(pageTitle: string): Promise<string> {
