@@ -1,18 +1,32 @@
-import Anthropic from '@anthropic-ai/sdk'
+// lib/claude.ts — заменён на Google Gemini (бесплатный уровень)
+// gemini-2.0-flash: 15 req/min, 1M токенов/день, 1500 req/день — бесплатно
 
-function getClient() {
-  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+const GEMINI_KEY = process.env.GEMINI_API_KEY!
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`
+
+async function geminiText(prompt: string): Promise<string> {
+  const res = await fetch(GEMINI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 8192 },
+    }),
+  })
+  if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 }
 
-// ─── Типы ответа от Claude ───────────────────────────────────────────────────
+// ─── Типы ────────────────────────────────────────────────────────────────────
 
 export interface ExtractedCharacter {
   id: string
   name: string
   role: 'protagonist' | 'antagonist' | 'supporting' | 'mentor' | 'other'
   role_label: string
-  appearance: string   // EN, для генерации аватара
-  description: string  // RU, для отображения
+  appearance: string
+  description: string
 }
 
 export interface ExtractedRelationship {
@@ -29,88 +43,19 @@ export interface ExtractionResult {
   author?: string
 }
 
-// ─── Промпт для извлечения персонажей ───────────────────────────────────────
-
-const SYSTEM_PROMPT = `Ты — литературный аналитик. Твоя задача: извлечь всех персонажей из текста книги и связи между ними.
-
-ВАЖНЫЕ ПРАВИЛА:
-1. Возвращай ТОЛЬКО валидный JSON без Markdown-блоков, преамбулы и пояснений
-2. Поле appearance — на АНГЛИЙСКОМ языке (для AI-генерации изображения)
-3. Поле description — на РУССКОМ языке
-4. id персонажа — латиница, snake_case, без пробелов
-5. Связи должны быть двусторонними там, где это уместно
-6. Если авторство/название не упоминается в тексте, оставь поля null`
-
-const USER_PROMPT = (text: string) => `Проанализируй текст и верни JSON строго следующего формата:
-
-{
-  "title": "Название книги или null",
-  "author": "Автор или null",
-  "characters": [
-    {
-      "id": "harry_potter",
-      "name": "Гарри Поттер",
-      "role": "protagonist",
-      "role_label": "Главный герой",
-      "appearance": "Young boy with messy dark hair, bright green eyes, round glasses, and a lightning bolt scar on his forehead. Slender build, wearing school robes.",
-      "description": "Мальчик, выживший после атаки Волан-де-Морта. Смелый, верный друг, обладает исключительными способностями к квиддичу."
-    }
-  ],
-  "relationships": [
-    {
-      "from": "harry_potter",
-      "to": "hermione_granger",
-      "type": "лучший друг",
-      "description": "Неразлучные друзья с первого курса"
-    }
-  ]
-}
-
-Роли (role): protagonist, antagonist, supporting, mentor, other
-
-Текст книги:
-${text.substring(0, 8000)}`
-
-// ─── Основная функция извлечения ─────────────────────────────────────────────
-
-export async function extractCharacters(text: string): Promise<ExtractionResult> {
-  const message = await getClient().messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [
-      { role: 'user', content: USER_PROMPT(text) }
-    ],
-  })
-
-  const raw = message.content[0].type === 'text' ? message.content[0].text : ''
-  const cleaned = raw.replace(/```json|```/g, '').trim()
-
-  try {
-    const parsed = JSON.parse(cleaned) as ExtractionResult
-    return parsed
-  } catch {
-    throw new Error(`Не удалось распарсить ответ Claude: ${raw.substring(0, 200)}`)
-  }
-}
-
 // ─── Генерация промпта для аватара ───────────────────────────────────────────
 
 export async function generateAvatarPrompt(
   characterName: string,
   appearance: string
 ): Promise<string> {
-  const message = await getClient().messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 350,
-    messages: [{
-      role: 'user',
-      content: `Create a detailed image generation prompt for a unique character portrait.
+  const text = await geminiText(
+    `Create a detailed image generation prompt for a unique character portrait.
 Character name: ${characterName}
 Appearance description: ${appearance}
 
 Requirements:
-- This character must look VISUALLY DISTINCT and immediately recognizable — unique face, hair, eyes
+- This character must look VISUALLY DISTINCT — unique face, hair, eyes
 - Emphasize the specific distinguishing features from the appearance description
 - Painterly portrait style, soft cinematic lighting
 - Neutral or blurred background, focus on face and upper body
@@ -118,8 +63,6 @@ Requirements:
 - Include specific hair color, eye color, and at least one unique facial feature
 
 Return ONLY the prompt text, no explanations.`
-    }]
-  })
-
-  return message.content[0].type === 'text' ? message.content[0].text.trim() : appearance
+  )
+  return text.trim() || appearance
 }

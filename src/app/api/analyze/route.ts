@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { createClient as createSupabase } from '@supabase/supabase-js'
 import { getCharacterColor, getInitials } from '@/lib/store'
 
@@ -12,16 +11,29 @@ function getAdminClient() {
 const CHUNK = 30000
 const OVERLAP = 2000
 
+const GEMINI_KEY = process.env.GEMINI_API_KEY!
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`
+
+async function geminiText(prompt: string): Promise<string> {
+  const res = await fetch(GEMINI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 8192 },
+    }),
+  })
+  if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+}
+
 function safeParseChunk(raw: string, chunkIndex: number): any | null {
   const clean = raw.replace(/```json|```/g, '').trim()
   const jsonStart = clean.indexOf('{')
   if (jsonStart === -1) return null
 
-  // Walk the string and find the matching closing brace for the root object
-  let depth = 0
-  let inString = false
-  let escaped = false
-  let jsonEnd = -1
+  let depth = 0, inString = false, escaped = false, jsonEnd = -1
   for (let i = jsonStart; i < clean.length; i++) {
     const ch = clean[i]
     if (escaped) { escaped = false; continue }
@@ -29,21 +41,15 @@ function safeParseChunk(raw: string, chunkIndex: number): any | null {
     if (ch === '"') { inString = !inString; continue }
     if (inString) continue
     if (ch === '{' || ch === '[') depth++
-    else if (ch === '}' || ch === ']') {
-      depth--
-      if (depth === 0) { jsonEnd = i; break }
-    }
+    else if (ch === '}' || ch === ']') { depth--; if (depth === 0) { jsonEnd = i; break } }
   }
 
-  // If JSON is balanced — parse as-is
   if (jsonEnd !== -1) {
     try { return JSON.parse(clean.slice(jsonStart, jsonEnd + 1)) } catch { /* fall through */ }
   }
 
-  // JSON was truncated (max_tokens hit) — close open arrays/objects and retry
   const partial = jsonEnd !== -1 ? clean.slice(jsonStart, jsonEnd + 1) : clean.slice(jsonStart)
-  // Count unclosed brackets
-  let opens = 0; let objs = 0; let inStr2 = false; let esc2 = false
+  let opens = 0, objs = 0, inStr2 = false, esc2 = false
   for (const ch of partial) {
     if (esc2) { esc2 = false; continue }
     if (ch === '\\' && inStr2) { esc2 = true; continue }
@@ -52,12 +58,11 @@ function safeParseChunk(raw: string, chunkIndex: number): any | null {
     if (ch === '[') opens++; else if (ch === ']') opens--
     if (ch === '{') objs++;  else if (ch === '}') objs--
   }
-  // Remove trailing incomplete entry then close brackets
   const trimmed = partial.replace(/,?\s*"[^"]*$/, '').replace(/,?\s*\{[^{}]*$/, '')
   const closing = ']'.repeat(Math.max(0, opens)) + '}'.repeat(Math.max(0, objs))
   try {
     const result = JSON.parse(trimmed + closing)
-    console.warn(`[analyze] chunk ${chunkIndex} JSON was truncated — recovered ${result?.characters?.length ?? 0} chars`)
+    console.warn(`[analyze] chunk ${chunkIndex} JSON truncated — recovered ${result?.characters?.length ?? 0} chars`)
     return result
   } catch {
     console.warn(`[analyze] chunk ${chunkIndex} JSON unrecoverable, skipping`)
@@ -65,19 +70,17 @@ function safeParseChunk(raw: string, chunkIndex: number): any | null {
   }
 }
 
-async function extractChunk(anthropic: Anthropic, text: string, chunkIndex: number, knownChars: {id: string, name: string}[]) {
+async function extractChunk(text: string, chunkIndex: number, knownChars: {id: string, name: string}[]) {
   const isFirst = chunkIndex === 0
   const knownSection = knownChars.length > 0
     ? `\nALREADY FOUND characters (reuse their exact IDs if you see them again, do NOT create duplicates):\n${knownChars.map(c => `  id="${c.id}" name="${c.name}"`).join('\n')}\n`
     : ''
-  const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 8192,
-    messages: [{ role: 'user', content: `Analyze this book fragment and extract ALL named characters and their relationships.
+
+  const prompt = `Analyze this book fragment and extract ALL named characters and their relationships.
 ${knownSection}
 RULES:
 - If a character from ALREADY FOUND list appears here (even under a nickname/shortened name), reuse their exact id
-- Each character's "appearance" must be VISUALLY UNIQUE and SPECIFIC — different hair color/style, eye color, face shape, build, age. NEVER use the same description for siblings or family members, give each one clearly distinct features
+- Each character's "appearance" must be VISUALLY UNIQUE and SPECIFIC — different hair color/style, eye color, face shape, build, age
 - appearance field is in ENGLISH for AI portrait generation
 - description field is in RUSSIAN
 
@@ -90,7 +93,7 @@ Return ONLY valid JSON without any markdown or explanation:
       "name": "Character Name",
       "role": "protagonist",
       "role_label": "Главный герой",
-      "appearance": "UNIQUE physical description in English — must differ from all other characters",
+      "appearance": "UNIQUE physical description in English",
       "description": "Character description in Russian"
     }
   ],
@@ -106,16 +109,13 @@ Return ONLY valid JSON without any markdown or explanation:
 Role values: protagonist, antagonist, supporting, mentor, other
 
 Fragment ${chunkIndex + 1}:
-${text}` }]
-  })
+${text}`
 
-  const raw = msg.content[0].type === 'text' ? msg.content[0].text : ''
+  const raw = await geminiText(prompt)
   return safeParseChunk(raw, chunkIndex)
 }
 
 async function extractCharacters(text: string) {
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
-
   const chunks: string[] = []
   let pos = 0
   while (pos < text.length && chunks.length < 3) {
@@ -123,16 +123,12 @@ async function extractCharacters(text: string) {
     pos += CHUNK - OVERLAP
   }
 
-  // Sequential — each chunk sees characters found so far to avoid duplicates
   const results: any[] = []
   const knownSoFar: {id: string, name: string}[] = []
   for (let i = 0; i < chunks.length; i++) {
     let r: any = null
-    try {
-      r = await extractChunk(anthropic, chunks[i], i, knownSoFar)
-    } catch (e) {
-      console.warn(`[analyze] chunk ${i} threw unexpectedly:`, e)
-    }
+    try { r = await extractChunk(chunks[i], i, knownSoFar) }
+    catch (e) { console.warn(`[analyze] chunk ${i} error:`, e) }
     results.push(r)
     if (r?.characters) {
       for (const c of r.characters) {
@@ -144,9 +140,7 @@ async function extractCharacters(text: string) {
   }
 
   const first = results[0] || {}
-  // nameKey -> canonical character (first seen wins)
   const charsByName = new Map<string, any>()
-  // per-result: chunk-local id -> canonical id
   const idRemaps: Map<string, string>[] = results.map(() => new Map())
 
   for (let ri = 0; ri < results.length; ri++) {
@@ -156,9 +150,8 @@ async function extractCharacters(text: string) {
       const key = c.name?.toLowerCase().trim()
       if (!key) continue
       if (!charsByName.has(key)) {
-        // ensure no duplicate ids across chunks
         let safeId = c.id
-        const taken = new Set(Array.from(charsByName.values()).map(x => x.id))
+        const taken = new Set(Array.from(charsByName.values()).map((x: any) => x.id))
         if (taken.has(safeId)) safeId = safeId + '_' + charsByName.size
         const canonical = { ...c, id: safeId }
         charsByName.set(key, canonical)
