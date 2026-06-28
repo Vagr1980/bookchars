@@ -241,9 +241,9 @@ export default function RelationshipGraph({ characters, relationships }: Props) 
       linkPath.attr('d', d => {
         const s = d.source as D3Node
         const t = d.target as D3Node
-        if (s.x == null || t.x == null) return ''
-        const sp = cardEdge(s.x, s.y, t.x, t.y)
-        const tp = cardEdge(t.x, t.y, s.x, s.y)
+        if (s.x == null || s.y == null || t.x == null || t.y == null) return ''
+        const sp = cardEdge(s.x!, s.y!, t.x!, t.y!)
+        const tp = cardEdge(t.x!, t.y!, s.x!, s.y!)
         const mx = (sp.x + tp.x) / 2
         const my = (sp.y + tp.y) / 2
         const cpx = mx - (tp.y - sp.y) * 0.15
@@ -254,8 +254,8 @@ export default function RelationshipGraph({ characters, relationships }: Props) 
       linkLabelG.attr('transform', d => {
         const s = d.source as D3Node
         const t = d.target as D3Node
-        if (s.x == null || t.x == null) return ''
-        return `translate(${(s.x + t.x) / 2},${(s.y + t.y) / 2})`
+        if (s.x == null || s.y == null || t.x == null || t.y == null) return ''
+        return `translate(${(s.x! + t.x!) / 2},${(s.y! + t.y!) / 2})`
       })
 
       node.attr('transform', d => `translate(${d.x ?? 0},${d.y ?? 0})`)
