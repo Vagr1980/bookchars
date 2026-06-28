@@ -169,7 +169,7 @@ async function extractCharacters(text: string) {
     }
   }
 
-  const allChars = [...charsByName.values()]
+  const allChars = Array.from(charsByName.values())
 
   const allRels: any[] = []
   for (let ri = 0; ri < results.length; ri++) {
