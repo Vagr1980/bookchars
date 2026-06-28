@@ -144,19 +144,23 @@ async function fetchWikisourcePage(title: string): Promise<string> {
   if (!data?.parse?.text?.['*']) return ''
   let html = data.parse.text['*'] as string
 
-  // Extract only main content area
-  const mainMatch = html.match(/<div[^>]*class="[^"]*mw-parser-output[^"]*"[^>]*>([\s\S]*)<\/div>/)
-  if (mainMatch) html = mainMatch[1]
+  // Slice to start of main content (don't use regex to find closing tag — nested divs break it)
+  const mainIdx = html.indexOf('mw-parser-output')
+  if (mainIdx !== -1) {
+    const tagEnd = html.indexOf('>', mainIdx)
+    if (tagEnd !== -1) html = html.slice(tagEnd + 1)
+  }
 
   // Remove tables (navigation, infoboxes), sidebars, edit links, categories
   html = html
     .replace(/<table[\s\S]*?<\/table>/gi, '')
-    .replace(/<div[^>]*class="[^"]*(navbox|navigation|toc|reflist|sister|noprint|mw-editsection|thumb)[^"]*"[\s\S]*?<\/div>/gi, '')
+    .replace(/<div[^>]*class="[^"]*(navbox|navigation|toc|reflist|sister|noprint|mw-editsection|thumb|hatnote|ws-noexport|catlinks)[^"]*"[\s\S]*?<\/div>/gi, '')
     .replace(/<span[^>]*class="[^"]*mw-editsection[^"]*"[\s\S]*?<\/span>/gi, '')
     .replace(/<ul[^>]*class="[^"]*gallery[^"]*"[\s\S]*?<\/ul>/gi, '')
+    .replace(/<div[^>]*id="catlinks"[\s\S]*$/i, '')
 
   // Cut off at references/external links sections
-  html = html.replace(/<h2[\s\S]*?(Ссылки|Примечания|Литература|Внешние|See also|Notes|References|External)[\s\S]*$/i, '')
+  html = html.replace(/<h2[\s\S]*?(Ссылки|Примечания|Литература|Внешние ссылки|See also|Notes|References|External)[\s\S]*$/i, '')
 
   return stripHtml(html)
 }
