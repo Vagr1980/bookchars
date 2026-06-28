@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-})
+function getClient() {
+  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+}
 
 // ─── Типы ответа от Claude ───────────────────────────────────────────────────
 
@@ -74,7 +74,7 @@ ${text.substring(0, 8000)}`
 // ─── Основная функция извлечения ─────────────────────────────────────────────
 
 export async function extractCharacters(text: string): Promise<ExtractionResult> {
-  const message = await client.messages.create({
+  const message = await getClient().messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
@@ -100,24 +100,24 @@ export async function generateAvatarPrompt(
   characterName: string,
   appearance: string
 ): Promise<string> {
-  const message = await client.messages.create({
+  const message = await getClient().messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 300,
+    max_tokens: 350,
     messages: [{
       role: 'user',
-      content: `Create a detailed image generation prompt for a character portrait.
-Character: ${characterName}
-Appearance: ${appearance}
+      content: `Create a detailed image generation prompt for a unique character portrait.
+Character name: ${characterName}
+Appearance description: ${appearance}
 
 Requirements:
-- Painterly fantasy portrait style
-- Soft cinematic lighting
-- Neutral or blurred background
-- Focus on face and upper body
-- Highly detailed facial features
+- This character must look VISUALLY DISTINCT and immediately recognizable — unique face, hair, eyes
+- Emphasize the specific distinguishing features from the appearance description
+- Painterly portrait style, soft cinematic lighting
+- Neutral or blurred background, focus on face and upper body
 - Professional book illustration quality
+- Include specific hair color, eye color, and at least one unique facial feature
 
-Return ONLY the prompt text, nothing else.`
+Return ONLY the prompt text, no explanations.`
     }]
   })
 

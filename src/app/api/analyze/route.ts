@@ -1,123 +1,261 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { extractCharacters } from '@/lib/claude'
+import Anthropic from '@anthropic-ai/sdk'
+import { createClient as createSupabase } from '@supabase/supabase-js'
 import { getCharacterColor, getInitials } from '@/lib/store'
-import type { BookInsert, CharacterInsert, RelationshipInsert } from '@/types'
 
-export const maxDuration = 60 // секунд (Vercel Pro позволяет до 300)
+export const maxDuration = 300
+
+function getAdminClient() {
+  return createSupabase(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+}
+
+const CHUNK = 40000
+const OVERLAP = 3000
+
+function safeParseChunk(raw: string, chunkIndex: number): any | null {
+  const clean = raw.replace(/```json|```/g, '').trim()
+  const jsonStart = clean.indexOf('{')
+  if (jsonStart === -1) return null
+
+  // Walk the string and find the matching closing brace for the root object
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let jsonEnd = -1
+  for (let i = jsonStart; i < clean.length; i++) {
+    const ch = clean[i]
+    if (escaped) { escaped = false; continue }
+    if (ch === '\\' && inString) { escaped = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{' || ch === '[') depth++
+    else if (ch === '}' || ch === ']') {
+      depth--
+      if (depth === 0) { jsonEnd = i; break }
+    }
+  }
+
+  // If JSON is balanced — parse as-is
+  if (jsonEnd !== -1) {
+    try { return JSON.parse(clean.slice(jsonStart, jsonEnd + 1)) } catch { /* fall through */ }
+  }
+
+  // JSON was truncated (max_tokens hit) — close open arrays/objects and retry
+  const partial = jsonEnd !== -1 ? clean.slice(jsonStart, jsonEnd + 1) : clean.slice(jsonStart)
+  // Count unclosed brackets
+  let opens = 0; let objs = 0; let inStr2 = false; let esc2 = false
+  for (const ch of partial) {
+    if (esc2) { esc2 = false; continue }
+    if (ch === '\\' && inStr2) { esc2 = true; continue }
+    if (ch === '"') { inStr2 = !inStr2; continue }
+    if (inStr2) continue
+    if (ch === '[') opens++; else if (ch === ']') opens--
+    if (ch === '{') objs++;  else if (ch === '}') objs--
+  }
+  // Remove trailing incomplete entry then close brackets
+  const trimmed = partial.replace(/,?\s*"[^"]*$/, '').replace(/,?\s*\{[^{}]*$/, '')
+  const closing = ']'.repeat(Math.max(0, opens)) + '}'.repeat(Math.max(0, objs))
+  try {
+    const result = JSON.parse(trimmed + closing)
+    console.warn(`[analyze] chunk ${chunkIndex} JSON was truncated — recovered ${result?.characters?.length ?? 0} chars`)
+    return result
+  } catch {
+    console.warn(`[analyze] chunk ${chunkIndex} JSON unrecoverable, skipping`)
+    return null
+  }
+}
+
+async function extractChunk(anthropic: Anthropic, text: string, chunkIndex: number, knownChars: {id: string, name: string}[]) {
+  const isFirst = chunkIndex === 0
+  const knownSection = knownChars.length > 0
+    ? `\nALREADY FOUND characters (reuse their exact IDs if you see them again, do NOT create duplicates):\n${knownChars.map(c => `  id="${c.id}" name="${c.name}"`).join('\n')}\n`
+    : ''
+  const msg = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 8192,
+    messages: [{ role: 'user', content: `Analyze this book fragment and extract ALL named characters and their relationships.
+${knownSection}
+RULES:
+- If a character from ALREADY FOUND list appears here (even under a nickname/shortened name), reuse their exact id
+- Each character's "appearance" must be VISUALLY UNIQUE and SPECIFIC — different hair color/style, eye color, face shape, build, age. NEVER use the same description for siblings or family members, give each one clearly distinct features
+- appearance field is in ENGLISH for AI portrait generation
+- description field is in RUSSIAN
+
+Return ONLY valid JSON without any markdown or explanation:
+{
+  ${isFirst ? '"title": "book title or null",\n  "author": "author or null",' : ''}
+  "characters": [
+    {
+      "id": "unique_latin_id_no_spaces",
+      "name": "Character Name",
+      "role": "protagonist",
+      "role_label": "Главный герой",
+      "appearance": "UNIQUE physical description in English — must differ from all other characters",
+      "description": "Character description in Russian"
+    }
+  ],
+  "relationships": [
+    {
+      "from": "character_id",
+      "to": "character_id",
+      "type": "relationship type in Russian"
+    }
+  ]
+}
+
+Role values: protagonist, antagonist, supporting, mentor, other
+
+Fragment ${chunkIndex + 1}:
+${text}` }]
+  })
+
+  const raw = msg.content[0].type === 'text' ? msg.content[0].text : ''
+  return safeParseChunk(raw, chunkIndex)
+}
+
+async function extractCharacters(text: string) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+
+  const chunks: string[] = []
+  let pos = 0
+  while (pos < text.length && chunks.length < 4) {
+    chunks.push(text.slice(pos, pos + CHUNK))
+    pos += CHUNK - OVERLAP
+  }
+
+  // Sequential — each chunk sees characters found so far to avoid duplicates
+  const results: any[] = []
+  const knownSoFar: {id: string, name: string}[] = []
+  for (let i = 0; i < chunks.length; i++) {
+    let r: any = null
+    try {
+      r = await extractChunk(anthropic, chunks[i], i, knownSoFar)
+    } catch (e) {
+      console.warn(`[analyze] chunk ${i} threw unexpectedly:`, e)
+    }
+    results.push(r)
+    if (r?.characters) {
+      for (const c of r.characters) {
+        if (c.id && c.name && !knownSoFar.find(k => k.id === c.id)) {
+          knownSoFar.push({ id: c.id, name: c.name })
+        }
+      }
+    }
+  }
+
+  const first = results[0] || {}
+  // nameKey -> canonical character (first seen wins)
+  const charsByName = new Map<string, any>()
+  // per-result: chunk-local id -> canonical id
+  const idRemaps: Map<string, string>[] = results.map(() => new Map())
+
+  for (let ri = 0; ri < results.length; ri++) {
+    const r = results[ri]
+    if (!r) continue
+    for (const c of (r.characters || [])) {
+      const key = c.name?.toLowerCase().trim()
+      if (!key) continue
+      if (!charsByName.has(key)) {
+        // ensure no duplicate ids across chunks
+        let safeId = c.id
+        const taken = new Set([...charsByName.values()].map(x => x.id))
+        if (taken.has(safeId)) safeId = safeId + '_' + charsByName.size
+        const canonical = { ...c, id: safeId }
+        charsByName.set(key, canonical)
+        idRemaps[ri].set(c.id, safeId)
+      } else {
+        idRemaps[ri].set(c.id, charsByName.get(key)!.id)
+      }
+    }
+  }
+
+  const allChars = [...charsByName.values()]
+
+  const allRels: any[] = []
+  for (let ri = 0; ri < results.length; ri++) {
+    const r = results[ri]
+    if (!r) continue
+    for (const rel of (r.relationships || [])) {
+      const from = idRemaps[ri].get(rel.from) || rel.from
+      const to = idRemaps[ri].get(rel.to) || rel.to
+      if (from !== to && allChars.find(c => c.id === from) && allChars.find(c => c.id === to)) {
+        allRels.push({ from, to, type: rel.type })
+      }
+    }
+  }
+
+  const uniqueRels = allRels.filter((r, i) =>
+    allRels.findIndex(x => x.from === r.from && x.to === r.to) === i
+  )
+
+  return {
+    title: first.title || null,
+    author: first.author || null,
+    characters: allChars,
+    relationships: uniqueRels,
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
     const { text, title, author } = await req.json()
-
     if (!text || text.trim().length < 100) {
-      return NextResponse.json(
-        { error: 'Текст слишком короткий. Вставьте минимум одну главу.' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'Текст слишком короткий.' }, { status: 400 })
     }
 
-    const supabase = createClient()
-
-    // ── 1. Создаём запись книги ───────────────────────────────────────────────
-    const bookInsert: BookInsert = {
-      title: title || 'Без названия',
-      author: author || null,
-      source_type: 'text',
-      text_preview: text.substring(0, 500),
-      status: 'analyzing',
-    }
-
+    const supabase = getAdminClient()
     const { data: book, error: bookError } = await supabase
       .from('books')
-      .insert(bookInsert)
-      .select()
-      .single()
+      .insert({ title: title || 'Без названия', author: author || null, source_type: 'text', text_preview: text.substring(0, 500), status: 'analyzing' })
+      .select().single()
+    if (bookError) throw new Error('Ошибка создания книги: ' + bookError.message)
 
-    if (bookError) throw new Error(`Ошибка создания книги: ${bookError.message}`)
+    const extracted = await extractCharacters(text)
+    const characters = extracted.characters || []
+    const relationships = extracted.relationships || []
 
-    // ── 2. Запускаем анализ через Claude ─────────────────────────────────────
-    let extraction
-    try {
-      extraction = await extractCharacters(text)
-    } catch (err) {
-      // Обновляем статус книги на ошибку
-      await supabase
-        .from('books')
-        .update({ status: 'error', error_message: String(err) })
-        .eq('id', book.id)
-      throw err
+    if (characters.length === 0) {
+      await supabase.from('books').update({ status: 'error', error_message: 'Персонажи не найдены' }).eq('id', book.id)
+      return NextResponse.json({ error: 'Персонажи не найдены в тексте' }, { status: 400 })
     }
 
-    // ── 3. Сохраняем персонажей ───────────────────────────────────────────────
-    const charactersInsert: CharacterInsert[] = extraction.characters.map((c, i) => ({
+    const charsInsert = characters.map((c: any, i: number) => ({
       book_id: book.id,
       name: c.name,
-      role: c.role,
-      role_label: c.role_label,
-      appearance: c.appearance,
-      description: c.description,
+      role: c.role || 'other',
+      role_label: c.role_label || 'Персонаж',
+      appearance: c.appearance || '',
+      description: c.description || '',
       color: getCharacterColor(i),
       initials: getInitials(c.name),
       avatar_url: null,
       avatar_prompt: null,
     }))
 
-    const { data: characters, error: charsError } = await supabase
-      .from('characters')
-      .insert(charactersInsert)
-      .select()
+    const { data: savedChars, error: charsError } = await supabase.from('characters').insert(charsInsert).select()
+    if (charsError) throw new Error('Ошибка сохранения персонажей: ' + charsError.message)
 
-    if (charsError) throw new Error(`Ошибка сохранения персонажей: ${charsError.message}`)
-
-    // ── 4. Маппим id из Claude → реальные uuid ───────────────────────────────
-    // Claude возвращает логические id (harry_potter), сохраняем с реальными uuid
     const idMap: Record<string, string> = {}
-    extraction.characters.forEach((ec, i) => {
-      if (characters[i]) idMap[ec.id] = characters[i].id
-    })
+    characters.forEach((c: any, i: number) => { if (savedChars[i]) idMap[c.id] = savedChars[i].id })
 
-    // ── 5. Сохраняем связи ───────────────────────────────────────────────────
-    const relsInsert: RelationshipInsert[] = extraction.relationships
-      .filter((r) => idMap[r.from] && idMap[r.to])
-      .map((r) => ({
-        book_id: book.id,
-        from_character_id: idMap[r.from],
-        to_character_id: idMap[r.to],
-        type: r.type,
-        description: r.description || null,
-      }))
+    const relsInsert = relationships
+      .filter((r: any) => idMap[r.from] && idMap[r.to])
+      .map((r: any) => ({ book_id: book.id, from_character_id: idMap[r.from], to_character_id: idMap[r.to], type: r.type, description: null }))
 
-    const { data: relationships, error: relsError } = await supabase
-      .from('relationships')
-      .insert(relsInsert)
-      .select()
+    const { data: savedRels } = relsInsert.length > 0
+      ? await supabase.from('relationships').insert(relsInsert).select()
+      : { data: [] }
 
-    if (relsError) throw new Error(`Ошибка сохранения связей: ${relsError.message}`)
+    await supabase.from('books').update({
+      status: 'done',
+      title: extracted.title || title || 'Без названия',
+      author: extracted.author || author || null,
+      characters_count: savedChars.length,
+    }).eq('id', book.id)
 
-    // ── 6. Обновляем статус книги ─────────────────────────────────────────────
-    const titleFromExtraction = extraction.title || title || 'Без названия'
-    await supabase
-      .from('books')
-      .update({
-        status: 'done',
-        title: titleFromExtraction,
-        author: extraction.author || author || null,
-        characters_count: characters.length,
-      })
-      .eq('id', book.id)
-
-    return NextResponse.json({
-      book_id: book.id,
-      characters,
-      relationships: relationships || [],
-    })
-
+    return NextResponse.json({ book_id: book.id, characters: savedChars, relationships: savedRels || [] })
   } catch (err) {
-    console.error('[analyze] Error:', err)
-    return NextResponse.json(
-      { error: String(err) },
-      { status: 500 }
-    )
+    console.error('[analyze]', err)
+    return NextResponse.json({ error: String(err) }, { status: 500 })
   }
 }
