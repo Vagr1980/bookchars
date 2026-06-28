@@ -26,7 +26,6 @@ book character art, high quality, professional.`
       }],
       generationConfig: {
         responseModalities: ['IMAGE'],
-        responseMimeType: 'image/png',
       }
     })
   })
