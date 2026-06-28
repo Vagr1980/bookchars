@@ -139,16 +139,26 @@ async function wikisourceJson(url: string): Promise<any> {
 }
 
 async function fetchWikisourcePage(title: string): Promise<string> {
-  // action=parse returns rendered HTML — more reliable than extracts for Wikisource templates
   const url = `https://ru.wikisource.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=text&format=json&origin=*`
   const data = await wikisourceJson(url)
   if (!data?.parse?.text?.['*']) return ''
-  const html = data.parse.text['*'] as string
-  // Strip navigation/header elements common on Wikisource
-  const cleaned = html
-    .replace(/<table[^>]*class="[^"]*ws-[^"]*"[\s\S]*?<\/table>/gi, '')
-    .replace(/<div[^>]*class="[^"]*(navigation|ws-header|header|toc)[^"]*"[\s\S]*?<\/div>/gi, '')
-  return stripHtml(cleaned)
+  let html = data.parse.text['*'] as string
+
+  // Extract only main content area
+  const mainMatch = html.match(/<div[^>]*class="[^"]*mw-parser-output[^"]*"[^>]*>([\s\S]*)<\/div>/)
+  if (mainMatch) html = mainMatch[1]
+
+  // Remove tables (navigation, infoboxes), sidebars, edit links, categories
+  html = html
+    .replace(/<table[\s\S]*?<\/table>/gi, '')
+    .replace(/<div[^>]*class="[^"]*(navbox|navigation|toc|reflist|sister|noprint|mw-editsection|thumb)[^"]*"[\s\S]*?<\/div>/gi, '')
+    .replace(/<span[^>]*class="[^"]*mw-editsection[^"]*"[\s\S]*?<\/span>/gi, '')
+    .replace(/<ul[^>]*class="[^"]*gallery[^"]*"[\s\S]*?<\/ul>/gi, '')
+
+  // Cut off at references/external links sections
+  html = html.replace(/<h2[\s\S]*?(Ссылки|Примечания|Литература|Внешние|See also|Notes|References|External)[\s\S]*$/i, '')
+
+  return stripHtml(html)
 }
 
 async function fetchWikisourceText(pageTitle: string): Promise<string> {
