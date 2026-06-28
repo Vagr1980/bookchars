@@ -140,35 +140,41 @@ async function wikisourceJson(url: string): Promise<any> {
 
 // Clean raw wikitext into readable plain text
 function cleanWikitext(raw: string): string {
+  // Skip redirect pages
+  if (/^#(REDIRECT|ПЕРЕНАПРАВЛЕНИЕ)/i.test(raw.trim())) return ''
+
+  // ── Strategy 1: extract <poem>…</poem> blocks (Wikisource poetry) ──────────
+  // Poems on Wikisource live inside <poem> tags — grab them directly,
+  // bypassing all the deeply-nested {{template}} complexity.
+  const poemParts: string[] = []
+  const poemRe = /<poem[^>]*>([\s\S]*?)<\/poem>/gi
+  let m: RegExpExecArray | null
+  while ((m = poemRe.exec(raw)) !== null) poemParts.push(m[1])
+
+  if (poemParts.length > 0) {
+    let text = poemParts.join('\n\n')
+    text = text.replace(/\[\[(?:[^|\]]+\|)?([^\]]+)\]\]/g, '$1') // wiki links
+    for (let i = 0; i < 3; i++) text = text.replace(/\{\{[^{}]*\}\}/g, '') // templates
+    text = text.replace(/<[^>]+>/g, '') // remaining tags
+    text = text.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    return text.replace(/\n{4,}/g, '\n\n\n').trim()
+  }
+
+  // ── Strategy 2: general prose cleanup ─────────────────────────────────────
   let text = raw
-  // Skip redirect pages entirely
-  if (/^#(REDIRECT|ПЕРЕНАПРАВЛЕНИЕ)/i.test(text.trim())) return ''
-  // Remove <noinclude>…</noinclude> metadata blocks
   text = text.replace(/<noinclude>[\s\S]*?<\/noinclude>/gi, '')
-  // Remove <ref>…</ref> footnotes
   text = text.replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
   text = text.replace(/<ref[^>]*\/>/gi, '')
-  // Remove HTML comments
   text = text.replace(/<!--[\s\S]*?-->/g, '')
-  // Strip nested templates {{…}} (up to 5 passes for nesting depth)
   for (let i = 0; i < 5; i++) text = text.replace(/\{\{[^{}]*\}\}/g, '')
-  // Wiki links [[Target|Label]] → Label, or [[Target]] → Target
   text = text.replace(/\[\[(?:[^|\]]+\|)?([^\]]+)\]\]/g, '$1')
-  // External links [url text] → text, [url] → ''
   text = text.replace(/\[https?:\/\/[^\s\]]+\s+([^\]]+)\]/g, '$1')
   text = text.replace(/\[https?:\/\/[^\s\]]+\]/g, '')
-  // Section headers == Heading == → newline + heading + newline
   text = text.replace(/={2,}\s*([^=\n]+?)\s*={2,}/g, '\n\n$1\n\n')
-  // Remove remaining HTML tags
   text = text.replace(/<[^>]+>/g, '')
-  // Decode HTML entities
-  text = text
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  text = text.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-  // Collapse whitespace
-  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{4,}/g, '\n\n\n').trim()
-  return text
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{4,}/g, '\n\n\n').trim()
 }
 
 async function fetchWikisourcePage(title: string): Promise<string> {
