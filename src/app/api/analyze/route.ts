@@ -158,7 +158,7 @@ async function extractCharacters(text: string) {
       if (!charsByName.has(key)) {
         // ensure no duplicate ids across chunks
         let safeId = c.id
-        const taken = new Set([...charsByName.values()].map(x => x.id))
+        const taken = new Set(Array.from(charsByName.values()).map(x => x.id))
         if (taken.has(safeId)) safeId = safeId + '_' + charsByName.size
         const canonical = { ...c, id: safeId }
         charsByName.set(key, canonical)
