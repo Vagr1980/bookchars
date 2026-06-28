@@ -9,8 +9,8 @@ function getAdminClient() {
   return createSupabase(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 }
 
-const CHUNK = 40000
-const OVERLAP = 3000
+const CHUNK = 30000
+const OVERLAP = 2000
 
 function safeParseChunk(raw: string, chunkIndex: number): any | null {
   const clean = raw.replace(/```json|```/g, '').trim()
@@ -118,7 +118,7 @@ async function extractCharacters(text: string) {
 
   const chunks: string[] = []
   let pos = 0
-  while (pos < text.length && chunks.length < 4) {
+  while (pos < text.length && chunks.length < 3) {
     chunks.push(text.slice(pos, pos + CHUNK))
     pos += CHUNK - OVERLAP
   }

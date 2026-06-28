@@ -137,8 +137,9 @@ export default function HomePage() {
             headers: { 'Authorization': `Bearer ${supabaseAnon}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ text, title }),
           })
-          const data = await res.json()
-          if (!res.ok) throw new Error(data.error || 'Ошибка Edge Function')
+          let data: any = {}
+          try { data = await res.json() } catch { /* non-JSON response */ }
+          if (!res.ok) throw new Error(data.error || `Ошибка Edge Function (${res.status})`)
           setAnalysisProgress('Готово!')
           router.push('/books/' + data.book_id)
           usedEdge = true
@@ -148,14 +149,22 @@ export default function HomePage() {
       }
       if (usedEdge) return
 
-      // Fallback: local /api/analyze (dev only — has timeout on Vercel free plan)
+      // Fallback: local /api/analyze
+      setAnalysisProgress('Анализирую персонажей...')
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, title }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Ошибка анализа')
+      let data: any = {}
+      try { data = await res.json() } catch { /* non-JSON Vercel error */ }
+      if (!res.ok) {
+        const isTimeout = res.status === 504 || res.status === 524
+        throw new Error(isTimeout
+          ? 'Анализ занял слишком долго. Попробуйте вставить более короткий фрагмент текста (до 50 000 символов)'
+          : (data.error || `Ошибка анализа (${res.status})`)
+        )
+      }
       setAnalysisProgress('Готово!')
       router.push('/books/' + data.book_id)
     } catch (err) {
