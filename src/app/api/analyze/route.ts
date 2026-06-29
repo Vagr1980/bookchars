@@ -8,8 +8,8 @@ function getAdminClient() {
   return createSupabase(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 }
 
-const CHUNK = 30000
-const OVERLAP = 2000
+const CHUNK = 8000   // Groq free tier: 12k TPM limit
+const OVERLAP = 500
 
 // Groq — бесплатный tier, без биллинга, llama-3.3-70b
 async function groqText(prompt: string): Promise<string> {
@@ -22,7 +22,7 @@ async function groqText(prompt: string): Promise<string> {
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 8192,
+      max_tokens: 3000,
       temperature: 0.1,
     }),
   })
