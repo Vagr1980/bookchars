@@ -9,7 +9,7 @@ function getAdminClient() {
   )
 }
 
-export const maxDuration = 30
+export const maxDuration = 60
 
 // Определяем культурный стиль по названию/автору книги
 function detectBookStyle(title: string, author: string): string {
