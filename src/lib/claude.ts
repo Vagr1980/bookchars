@@ -48,22 +48,24 @@ export interface ExtractionResult {
 
 export async function generateAvatarPrompt(
   characterName: string,
-  appearance: string
+  appearance: string,
+  bookTitle?: string,
+  bookAuthor?: string,
 ): Promise<string> {
+  const bookContext = bookTitle ? `\nBook: "${bookTitle}"${bookAuthor ? ` by ${bookAuthor}` : ''}` : ''
+
   const text = await groqText(
-    `Create a detailed image generation prompt for a unique character portrait.
-Character name: ${characterName}
-Appearance description: ${appearance}
+    `Create a concise image generation prompt for a character portrait.
+Character: ${characterName}${bookContext}
+Appearance: ${appearance}
 
 Requirements:
-- This character must look VISUALLY DISTINCT — unique face, hair, eyes
-- Emphasize the specific distinguishing features from the appearance description
-- Painterly portrait style, soft cinematic lighting
-- Neutral or blurred background, focus on face and upper body
-- Professional book illustration quality
-- Include specific hair color, eye color, and at least one unique facial feature
+- Appearance MUST match the book's cultural/historical setting (Russian folk tale = Slavic features and costume, NOT Greek/Roman/Western European)
+- Visually DISTINCT: specific hair color, eye color, unique face features
+- Focus on face and upper body, neutral background
+- Do NOT add elements from other cultures if the book has a specific setting
 
-Return ONLY the prompt text, no explanations.`
+Return ONLY the prompt text (2-3 sentences max), no explanations.`
   )
   return text.trim() || appearance
 }
