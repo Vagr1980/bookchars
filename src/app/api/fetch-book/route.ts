@@ -178,35 +178,58 @@ function cleanWikitext(raw: string): string {
 }
 
 async function fetchWikisourcePage(title: string): Promise<string> {
-  // Use wikitext — much cleaner than HTML (no nested-div nightmare)
-  const url = `https://ru.wikisource.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=wikitext&redirects=1&format=json&origin=*`
-  const data = await wikisourceJson(url)
-  if (!data?.parse?.wikitext?.['*']) return ''
-  return cleanWikitext(data.parse.wikitext['*'] as string)
+  // Strategy 1: wikitext with <poem> tag extraction (best for poetry)
+  const wtUrl = `https://ru.wikisource.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=wikitext&redirects=1&format=json&origin=*`
+  const wtData = await wikisourceJson(wtUrl)
+  if (wtData?.parse?.wikitext?.['*']) {
+    const raw = wtData.parse.wikitext['*'] as string
+    if (/<poem/i.test(raw)) {
+      const cleaned = cleanWikitext(raw)
+      if (cleaned.length >= 100) return cleaned
+    }
+  }
+
+  // Strategy 2: rendered HTML (reliable for prose — templates fully expanded by server)
+  const htmlUrl = `https://ru.wikisource.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=text&disablelimitreport=1&redirects=1&format=json&origin=*`
+  const htmlData = await wikisourceJson(htmlUrl)
+  const html = htmlData?.parse?.text?.['*'] as string | undefined
+  if (!html) return ''
+
+  // Strip MediaWiki navigation/metadata blocks before converting to text
+  const cleaned = html
+    .replace(/<div[^>]*class="[^"]*(noprint|ws-noexport|ws-header|ws-footer|navigation-not-searchable|mw-editsection)[^"]*"[\s\S]*?<\/div>/gi, '')
+    .replace(/<table[\s\S]*?<\/table>/gi, '')
+    .replace(/<sup[\s\S]*?<\/sup>/gi, '')
+
+  return stripHtml(cleaned)
 }
 
 async function fetchWikisourceText(pageTitle: string): Promise<string> {
-  // If this is a sub-page (e.g. "Война и мир (Толстой)/Том 3"), find the root
   const rootTitle = pageTitle.includes('/') ? pageTitle.split('/')[0] : pageTitle
 
-  // Get sub-pages list from root
-  const queryUrl = `https://ru.wikisource.org/w/api.php?action=query&list=allpages&apprefix=${encodeURIComponent(rootTitle + '/')}&aplimit=30&apnamespace=0&format=json&origin=*`
-  const queryData = await wikisourceJson(queryUrl)
-  const subPages: string[] = ((queryData?.query?.allpages || []) as any[])
-    .map((p: any) => p.title)
-    .filter((t: string) => !t.match(/обсуждение|discuss/i))
-    .slice(0, 12)
+  // Seed candidates: always include the exact title + root
+  const candidates = new Set<string>([rootTitle])
+  if (pageTitle !== rootTitle) candidates.add(pageTitle)
 
-  // Fetch root + all sub-pages with small delay to avoid rate limiting
-  const allTitles = [rootTitle, ...subPages]
+  // Also query allpages for subpages of root
+  try {
+    const queryUrl = `https://ru.wikisource.org/w/api.php?action=query&list=allpages&apprefix=${encodeURIComponent(rootTitle + '/')}&aplimit=30&apnamespace=0&format=json&origin=*`
+    const queryData = await wikisourceJson(queryUrl)
+    const subPages: string[] = ((queryData?.query?.allpages || []) as any[])
+      .map((p: any) => p.title)
+      .filter((t: string) => !t.match(/обсуждение|discuss/i))
+    subPages.forEach(p => candidates.add(p))
+  } catch { /* ignore — will work with the pages we already have */ }
+
+  const allTitles = Array.from(candidates).slice(0, 14)
   const texts: string[] = []
-  for (const t of allTitles) {
-    const txt = await fetchWikisourcePage(t).catch(() => '')
-    texts.push(txt)
-    if (texts.length > 1) await new Promise(r => setTimeout(r, 300)) // polite delay
+  for (let i = 0; i < allTitles.length; i++) {
+    const txt = await fetchWikisourcePage(allTitles[i]).catch(() => '')
+    if (txt) texts.push(txt)
+    if (i > 0) await new Promise(r => setTimeout(r, 300)) // polite delay
   }
 
-  const full = texts.filter(Boolean).join('\n\n')
+  const full = texts.join('\n\n')
   if (full.length < 500) throw new Error('Текст не найден на Wikisource — попробуйте другой источник')
   return full
 }
