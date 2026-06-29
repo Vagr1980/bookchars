@@ -1,4 +1,4 @@
-// lib/claude.ts — Groq (бесплатный tier, llama-3.3-70b)
+// lib/claude.ts — Groq (llama-3.1-8b-instant: 500k TPD / 131k TPM)
 
 async function groqText(prompt: string): Promise<string> {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -8,9 +8,9 @@ async function groqText(prompt: string): Promise<string> {
       'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.1-8b-instant',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 2048,
+      max_tokens: 1024,
       temperature: 0.1,
     }),
   })

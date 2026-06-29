@@ -8,28 +8,46 @@ function getAdminClient() {
   return createSupabase(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 }
 
-const CHUNK = 8000    // Groq free tier: ~12k TPM — 8k chars ≈ 6k tokens + prompt ≈ 9k total
+const CHUNK = 8000    // llama-3.1-8b-instant: 131k TPM — 8k chars ≈ 6k tokens, fits easily
 const OVERLAP = 800
 const MAX_CHUNKS = 5  // покрываем ~36k символов = ~180 страниц книги
 
-// Groq — бесплатный tier, без биллинга, llama-3.3-70b
+// Groq — llama-3.1-8b-instant: 500k TPD / 131k TPM (5x больше чем 70b)
 async function groqText(prompt: string): Promise<string> {
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 3000,
-      temperature: 0.1,
-    }),
-  })
-  if (!res.ok) throw new Error(`Groq ${res.status}: ${await res.text()}`)
-  const data = await res.json()
-  return data?.choices?.[0]?.message?.content ?? ''
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 2000,
+        temperature: 0.1,
+      }),
+    })
+
+    if (res.status === 429) {
+      const data = await res.json().catch(() => ({}))
+      const msg: string = data?.error?.message || ''
+      // TPD (daily) limit — no point retrying today
+      if (msg.includes('per day') || msg.includes('TPD')) {
+        const mins = (msg.match(/try again in (\d+)m/) || [])[1]
+        throw new Error(`Дневной лимит Groq исчерпан. Попробуйте через ${mins ? mins + ' минут' : 'час'}.`)
+      }
+      // TPM (per-minute) limit — wait using retry-after header
+      const wait = parseInt(res.headers.get('retry-after') || '65') * 1000
+      if (attempt < 2) { await new Promise(r => setTimeout(r, wait)); continue }
+      throw new Error(`Groq rate limit: ${msg}`)
+    }
+
+    if (!res.ok) throw new Error(`Groq ${res.status}: ${await res.text()}`)
+    const data = await res.json()
+    return data?.choices?.[0]?.message?.content ?? ''
+  }
+  throw new Error('Groq: превышено число попыток')
 }
 
 function safeParseChunk(raw: string, chunkIndex: number): any | null {
@@ -138,7 +156,7 @@ async function extractCharacters(text: string) {
   const knownSoFar: {id: string, name: string}[] = []
   for (let i = 0; i < chunks.length; i++) {
     // Пауза между запросами — Groq free tier 12k TPM (≈1 запрос/мин)
-    if (i > 0) await new Promise(r => setTimeout(r, 62000))
+    if (i > 0) await new Promise(r => setTimeout(r, 3000)) // 3s gap — 8b has 131k TPM
     let r: any = null
     try { r = await extractChunk(chunks[i], i, knownSoFar) }
     catch (e) { console.warn(`[analyze] chunk ${i} error:`, e) }
