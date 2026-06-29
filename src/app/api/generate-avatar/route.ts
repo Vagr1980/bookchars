@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createSupabase } from '@supabase/supabase-js'
-import { generateAvatarPrompt } from '@/lib/claude'
 import { uploadAvatarToStorage } from '@/lib/gemini'
 
 function getAdminClient() {
@@ -38,19 +37,30 @@ function detectBookStyle(title: string, author: string): string {
   return 'painterly book illustration style, professional character art'
 }
 
-// Pollinations.ai — бесплатно, без ключа
+// Pollinations.ai — retry при 429 (queue full) до 4 раз с задержкой
 async function generateWithPollinations(prompt: string): Promise<{ base64: string; mimeType: string }> {
   const safePrompt = prompt.slice(0, 450)
   const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(safePrompt)}?width=512&height=768&nologo=true&model=flux&seed=${Math.floor(Math.random() * 999999)}`
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(25000) })
-  if (!res.ok) throw new Error(`Pollinations error ${res.status}: ${await res.text()}`)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 12000)) // 12s, 24s, 36s
 
-  const buf = await res.arrayBuffer()
-  return {
-    base64: Buffer.from(buf).toString('base64'),
-    mimeType: res.headers.get('content-type') || 'image/jpeg',
+    const res = await fetch(url, { signal: AbortSignal.timeout(28000) })
+
+    if (res.status === 429) {
+      if (attempt < 3) continue // retry after delay
+      throw new Error('Pollinations queue full — попробуйте позже')
+    }
+
+    if (!res.ok) throw new Error(`Pollinations error ${res.status}`)
+
+    const buf = await res.arrayBuffer()
+    return {
+      base64: Buffer.from(buf).toString('base64'),
+      mimeType: res.headers.get('content-type') || 'image/jpeg',
+    }
   }
+  throw new Error('Pollinations: превышено число попыток')
 }
 
 export async function POST(req: NextRequest) {
@@ -84,18 +94,13 @@ export async function POST(req: NextRequest) {
     const bookAuthor = (character.books as any)?.author || ''
     const bookStyle  = detectBookStyle(bookTitle, bookAuthor)
 
-    // ── 4. Генерируем промпт через Groq (с контекстом книги) ─────────────────
-    let avatarPrompt = character.avatar_prompt
-    if (!avatarPrompt) {
-      avatarPrompt = await generateAvatarPrompt(character.name, character.appearance, bookTitle, bookAuthor)
-      await supabase
-        .from('characters')
-        .update({ avatar_prompt: avatarPrompt })
-        .eq('id', character_id)
-    }
+    // ── 4. Строим промпт напрямую из appearance (без Groq — экономим TPM) ─────
+    // Groq для промптов аватаров убран: при 13 персонажах он исчерпывает 6k TPM.
+    // appearance уже содержит детальное описание на английском из этапа анализа.
+    const avatarPrompt = character.avatar_prompt || character.appearance
 
     // ── 5. Генерируем изображение через Pollinations.ai ──────────────────────
-    const fullPrompt = `${avatarPrompt}. ${bookStyle}. Soft cinematic lighting, detailed face, neutral background, high quality.`
+    const fullPrompt = `Portrait of ${character.name}. ${avatarPrompt}. ${bookStyle}. Soft lighting, detailed face, neutral background.`
     const image = await generateWithPollinations(fullPrompt)
 
     // ── 6. Загружаем в Supabase Storage ──────────────────────────────────────
