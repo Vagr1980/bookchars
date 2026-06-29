@@ -1,21 +1,22 @@
-// lib/claude.ts — заменён на Google Gemini (бесплатный уровень)
-// gemini-2.0-flash: 15 req/min, 1M токенов/день, 1500 req/день — бесплатно
+// lib/claude.ts — Groq (бесплатный tier, llama-3.3-70b)
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY!
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`
-
-async function geminiText(prompt: string): Promise<string> {
-  const res = await fetch(GEMINI_URL, {
+async function groqText(prompt: string): Promise<string> {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+    },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 8192 },
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2048,
+      temperature: 0.1,
     }),
   })
-  if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text()}`)
+  if (!res.ok) throw new Error(`Groq error ${res.status}: ${await res.text()}`)
   const data = await res.json()
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  return data?.choices?.[0]?.message?.content ?? ''
 }
 
 // ─── Типы ────────────────────────────────────────────────────────────────────
@@ -49,7 +50,7 @@ export async function generateAvatarPrompt(
   characterName: string,
   appearance: string
 ): Promise<string> {
-  const text = await geminiText(
+  const text = await groqText(
     `Create a detailed image generation prompt for a unique character portrait.
 Character name: ${characterName}
 Appearance description: ${appearance}
