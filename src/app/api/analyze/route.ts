@@ -8,8 +8,9 @@ function getAdminClient() {
   return createSupabase(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 }
 
-const CHUNK = 8000   // Groq free tier: 12k TPM limit
-const OVERLAP = 500
+const CHUNK = 8000    // Groq free tier: ~12k TPM — 8k chars ≈ 6k tokens + prompt ≈ 9k total
+const OVERLAP = 800
+const MAX_CHUNKS = 5  // покрываем ~36k символов = ~180 страниц книги
 
 // Groq — бесплатный tier, без биллинга, llama-3.3-70b
 async function groqText(prompt: string): Promise<string> {
@@ -79,15 +80,21 @@ async function extractChunk(text: string, chunkIndex: number, knownChars: {id: s
     ? `\nALREADY FOUND characters (reuse their exact IDs if you see them again, do NOT create duplicates):\n${knownChars.map(c => `  id="${c.id}" name="${c.name}"`).join('\n')}\n`
     : ''
 
-  const prompt = `Analyze this book fragment and extract ALL named characters and their relationships.
+  const prompt = `Analyze this book/poem fragment and extract ALL characters and their relationships.
 ${knownSection}
 RULES:
-- If a character from ALREADY FOUND list appears here (even under a nickname/shortened name), reuse their exact id
-- Each character's "appearance" must be VISUALLY UNIQUE and SPECIFIC — different hair color/style, eye color, face shape, build, age
-- appearance field is in ENGLISH for AI portrait generation
-- description field is in RUSSIAN
+1. Extract EVERY named character: heroes, villains, supporting characters, magical creatures, animals, spirits, gods — anyone with a name or title
+2. If a character from ALREADY FOUND list appears here (even under a nickname/shortened name), reuse their exact id
+3. "appearance" — ENGLISH, for AI image generation. MUST reflect the book's cultural/historical setting:
+   - Russian folk tale → Slavic peasant/noble clothing, Russian features, authentic folk costume
+   - Medieval Europe → medieval clothing, European features
+   - Modern novel → contemporary clothing
+   - Fantasy → appropriate fantasy attire
+   - Animal/creature → describe its animal/creature body accurately
+4. Make each appearance VISUALLY UNIQUE: specific hair color, eye color, build, age, distinctive features
+5. "description" — RUSSIAN, short character summary
 
-Return ONLY valid JSON without any markdown or explanation:
+Return ONLY valid JSON, no markdown:
 {
   ${isFirst ? '"title": "book title or null",\n  "author": "author or null",' : ''}
   "characters": [
@@ -96,20 +103,21 @@ Return ONLY valid JSON without any markdown or explanation:
       "name": "Character Name",
       "role": "protagonist",
       "role_label": "Главный герой",
-      "appearance": "UNIQUE physical description in English",
-      "description": "Character description in Russian"
+      "appearance": "UNIQUE culturally-accurate physical description in English",
+      "description": "Описание персонажа на русском"
     }
   ],
   "relationships": [
     {
       "from": "character_id",
       "to": "character_id",
-      "type": "relationship type in Russian"
+      "type": "тип связи на русском"
     }
   ]
 }
 
 Role values: protagonist, antagonist, supporting, mentor, other
+role_label values: Главный герой, Злодей, Второстепенный персонаж, Наставник, Персонаж
 
 Fragment ${chunkIndex + 1}:
 ${text}`
@@ -121,7 +129,7 @@ ${text}`
 async function extractCharacters(text: string) {
   const chunks: string[] = []
   let pos = 0
-  while (pos < text.length && chunks.length < 3) {
+  while (pos < text.length && chunks.length < MAX_CHUNKS) {
     chunks.push(text.slice(pos, pos + CHUNK))
     pos += CHUNK - OVERLAP
   }
@@ -129,6 +137,8 @@ async function extractCharacters(text: string) {
   const results: any[] = []
   const knownSoFar: {id: string, name: string}[] = []
   for (let i = 0; i < chunks.length; i++) {
+    // Пауза между запросами — Groq free tier 12k TPM (≈1 запрос/мин)
+    if (i > 0) await new Promise(r => setTimeout(r, 62000))
     let r: any = null
     try { r = await extractChunk(chunks[i], i, knownSoFar) }
     catch (e) { console.warn(`[analyze] chunk ${i} error:`, e) }

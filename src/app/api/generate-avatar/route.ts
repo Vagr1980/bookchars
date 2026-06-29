@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createSupabase } from '@supabase/supabase-js'
 import { generateAvatarPrompt } from '@/lib/claude'
-import { generateCharacterAvatar, uploadAvatarToStorage } from '@/lib/gemini'
+import { uploadAvatarToStorage } from '@/lib/gemini'
 
 function getAdminClient() {
   return createSupabase(
@@ -11,6 +11,22 @@ function getAdminClient() {
 }
 
 export const maxDuration = 30
+
+// Pollinations.ai — бесплатно, без ключа, ~512×768 portrait
+async function generateWithPollinations(prompt: string): Promise<{ base64: string; mimeType: string }> {
+  // Limit prompt length to avoid URL issues
+  const safePrompt = prompt.slice(0, 400)
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(safePrompt)}?width=512&height=768&nologo=true&model=flux&seed=${Math.floor(Math.random() * 999999)}`
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(25000) })
+  if (!res.ok) throw new Error(`Pollinations error ${res.status}: ${await res.text()}`)
+
+  const buf = await res.arrayBuffer()
+  return {
+    base64: Buffer.from(buf).toString('base64'),
+    mimeType: res.headers.get('content-type') || 'image/jpeg',
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,13 +51,10 @@ export async function POST(req: NextRequest) {
 
     // ── 2. Если аватар уже есть — возвращаем его ──────────────────────────────
     if (character.avatar_url) {
-      return NextResponse.json({
-        character_id,
-        avatar_url: character.avatar_url,
-      })
+      return NextResponse.json({ character_id, avatar_url: character.avatar_url })
     }
 
-    // ── 3. Генерируем промпт через Claude ─────────────────────────────────────
+    // ── 3. Генерируем промпт через Groq ───────────────────────────────────────
     let avatarPrompt = character.avatar_prompt
     if (!avatarPrompt) {
       avatarPrompt = await generateAvatarPrompt(character.name, character.appearance)
@@ -51,15 +64,13 @@ export async function POST(req: NextRequest) {
         .eq('id', character_id)
     }
 
-    // ── 4. Генерируем изображение через Gemini ────────────────────────────────
-    const image = await generateCharacterAvatar(avatarPrompt, character.name)
+    // ── 4. Генерируем изображение через Pollinations.ai ───────────────────────
+    const image = await generateWithPollinations(
+      `Portrait of ${character.name}. ${avatarPrompt}. Painterly illustration, soft lighting, detailed face, neutral background, professional book character art.`
+    )
 
     // ── 5. Загружаем в Supabase Storage ──────────────────────────────────────
-    const avatarUrl = await uploadAvatarToStorage(
-      image.base64,
-      image.mimeType,
-      character_id
-    )
+    const avatarUrl = await uploadAvatarToStorage(image.base64, image.mimeType, character_id)
 
     // ── 6. Обновляем запись персонажа ─────────────────────────────────────────
     await supabase
