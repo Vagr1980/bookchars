@@ -189,19 +189,34 @@ async function fetchWikisourcePage(title: string): Promise<string> {
     }
   }
 
-  // Strategy 2: rendered HTML (reliable for prose — templates fully expanded by server)
+  // Strategy 2: rendered HTML — extract only <p> paragraph text
+  // (avoids navboxes, authority control, metadata tables, sister-project links)
   const htmlUrl = `https://ru.wikisource.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=text&disablelimitreport=1&redirects=1&format=json&origin=*`
   const htmlData = await wikisourceJson(htmlUrl)
-  const html = htmlData?.parse?.text?.['*'] as string | undefined
+  let html = htmlData?.parse?.text?.['*'] as string | undefined
   if (!html) return ''
 
-  // Strip MediaWiki navigation/metadata blocks before converting to text
-  const cleaned = html
-    .replace(/<div[^>]*class="[^"]*(noprint|ws-noexport|ws-header|ws-footer|navigation-not-searchable|mw-editsection)[^"]*"[\s\S]*?<\/div>/gi, '')
+  // Cut off at authority-control/metadata section (always at the bottom)
+  for (const marker of ['нормативный контроль', 'mw-authority-control', 'wikitags']) {
+    const idx = html.toLowerCase().indexOf(marker)
+    if (idx !== -1) html = html.slice(0, idx)
+  }
+
+  // Remove tables (metadata grids, navigation tables) and footnotes
+  html = html
     .replace(/<table[\s\S]*?<\/table>/gi, '')
     .replace(/<sup[\s\S]*?<\/sup>/gi, '')
 
-  return stripHtml(cleaned)
+  // Extract only <p> paragraph content — real book text lives here
+  const parts: string[] = []
+  const pRe = /<p\b[^>]*>([\s\S]*?)<\/p>/gi
+  let m: RegExpExecArray | null
+  while ((m = pRe.exec(html)) !== null) {
+    const text = stripHtml(m[1]).trim()
+    if (text.length > 40) parts.push(text) // skip tiny nav/caption fragments
+  }
+
+  return parts.join('\n\n')
 }
 
 async function fetchWikisourceText(pageTitle: string): Promise<string> {
