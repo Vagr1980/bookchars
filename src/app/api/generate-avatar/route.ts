@@ -9,7 +9,7 @@ function getAdminClient() {
   )
 }
 
-export const maxDuration = 60
+export const maxDuration = 120
 
 // Определяем культурный стиль по названию/автору книги
 function detectBookStyle(title: string, author: string): string {
@@ -42,10 +42,10 @@ async function generateWithPollinations(prompt: string): Promise<{ base64: strin
   const safePrompt = prompt.slice(0, 450)
   const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(safePrompt)}?width=512&height=768&nologo=true&model=flux&seed=${Math.floor(Math.random() * 999999)}`
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 12000)) // 12s, 24s, 36s
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, [8000, 15000, 25000, 40000][attempt - 1]))
 
-    const res = await fetch(url, { signal: AbortSignal.timeout(28000) })
+    const res = await fetch(url, { signal: AbortSignal.timeout(50000) })
 
     if (res.status === 429) {
       if (attempt < 3) continue // retry after delay
