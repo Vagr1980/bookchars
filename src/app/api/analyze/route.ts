@@ -101,17 +101,19 @@ async function extractChunk(text: string, chunkIndex: number, knownChars: {id: s
   const prompt = `Analyze this book/poem fragment and extract ALL characters and their relationships.
 ${knownSection}
 RULES:
-1. Extract EVERY named character: heroes, villains, supporting characters, magical creatures, NAMED ANIMALS (horses, birds, fish, etc.), spirits, gods — anyone with a name or title
-   - In Russian folk tales: named horses, Жар-птица, Конёк, magical fish, etc. are ALL characters
+1. Extract EVERY named character: heroes, villains, supporting characters, magical creatures, NAMED ANIMALS, spirits — anyone with a name or title
    - The TITLE CHARACTER of the book must always be included
+   - In Russian folk tales: named horses, Жар-птица, magical fish, etc. are characters
+   - Do NOT create duplicate characters for the same person with different names/nicknames
 2. If a character from ALREADY FOUND list appears here (even under a nickname/shortened name), reuse their exact id
-3. "appearance" — ENGLISH, for AI image generation. MUST reflect the book's cultural/historical setting:
-   - Russian folk tale → Slavic peasant/noble clothing, Russian features, authentic folk costume
-   - Medieval Europe → medieval clothing, European features
-   - Modern novel → contemporary clothing
-   - Fantasy → appropriate fantasy attire
-   - Animal/creature → describe its ANIMAL BODY accurately (horse, bird, fish — not human clothing)
-4. Make each appearance VISUALLY UNIQUE: specific color, size, distinctive markings or features
+3. "appearance" — STRICTLY IN ENGLISH, for AI image generation
+   - Use ONLY details actually mentioned in the text about this character
+   - If appearance is not described, write a plausible description based on their role and the era
+   - MUST reflect the book's cultural/historical setting (19th century Russian novel → period clothing, Russian features)
+   - Animal/creature → describe its animal body (horse, bird — not human clothing)
+   - Make each character VISUALLY DISTINCT: specific hair color, eye color, age, build
+   - NEVER write appearance in Russian — always English only
+4. "author" — ONLY the real author's name from the text. If unsure, write null
 5. "description" — RUSSIAN, short character summary
 6. Do NOT invent characters not present in the text
 
