@@ -101,16 +101,19 @@ async function extractChunk(text: string, chunkIndex: number, knownChars: {id: s
   const prompt = `Analyze this book/poem fragment and extract ALL characters and their relationships.
 ${knownSection}
 RULES:
-1. Extract EVERY named character: heroes, villains, supporting characters, magical creatures, animals, spirits, gods — anyone with a name or title
+1. Extract EVERY named character: heroes, villains, supporting characters, magical creatures, NAMED ANIMALS (horses, birds, fish, etc.), spirits, gods — anyone with a name or title
+   - In Russian folk tales: named horses, Жар-птица, Конёк, magical fish, etc. are ALL characters
+   - The TITLE CHARACTER of the book must always be included
 2. If a character from ALREADY FOUND list appears here (even under a nickname/shortened name), reuse their exact id
 3. "appearance" — ENGLISH, for AI image generation. MUST reflect the book's cultural/historical setting:
    - Russian folk tale → Slavic peasant/noble clothing, Russian features, authentic folk costume
    - Medieval Europe → medieval clothing, European features
    - Modern novel → contemporary clothing
    - Fantasy → appropriate fantasy attire
-   - Animal/creature → describe its animal/creature body accurately
-4. Make each appearance VISUALLY UNIQUE: specific hair color, eye color, build, age, distinctive features
+   - Animal/creature → describe its ANIMAL BODY accurately (horse, bird, fish — not human clothing)
+4. Make each appearance VISUALLY UNIQUE: specific color, size, distinctive markings or features
 5. "description" — RUSSIAN, short character summary
+6. Do NOT invent characters not present in the text
 
 Return ONLY valid JSON, no markdown:
 {
@@ -212,9 +215,12 @@ async function extractCharacters(text: string) {
     allRels.findIndex(x => x.from === r.from && x.to === r.to) === i
   )
 
+  // LLM sometimes returns literal string "null" instead of JSON null
+  const cleanStr = (v: any) => (!v || v === 'null' || v === 'none' || v === 'unknown' || v === 'не указано') ? null : String(v)
+
   return {
-    title: first.title || null,
-    author: first.author || null,
+    title: cleanStr(first.title),
+    author: cleanStr(first.author),
     characters: allChars,
     relationships: uniqueRels,
   }
