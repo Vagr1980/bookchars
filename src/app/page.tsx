@@ -126,30 +126,7 @@ export default function HomePage() {
     setAnalysisProgress('Отправляю текст на анализ...')
 
     try {
-      // Primary: Supabase Edge Function (no Vercel timeout limit, works in production)
-      const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL
-      const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      let usedEdge = false
-      if (supabaseUrl && supabaseAnon) {
-        try {
-          const res = await fetch(`${supabaseUrl}/functions/v1/analyze-book`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${supabaseAnon}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text, title }),
-          })
-          let data: any = {}
-          try { data = await res.json() } catch { /* non-JSON response */ }
-          if (!res.ok) throw new Error(data.error || `Ошибка Edge Function (${res.status})`)
-          setAnalysisProgress('Готово!')
-          router.push('/books/' + data.book_id)
-          usedEdge = true
-        } catch (edgeErr) {
-          console.warn('Edge function failed, falling back to local API:', edgeErr)
-        }
-      }
-      if (usedEdge) return
-
-      // Fallback: local /api/analyze
+      // Local /api/analyze (maxDuration=300, Groq multi-chunk)
       setAnalysisProgress('Анализирую персонажей...')
       const res = await fetch('/api/analyze', {
         method: 'POST',
