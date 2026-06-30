@@ -18,10 +18,14 @@ export default function CharacterGrid({ characters, bookId }: Props) {
   const [generatingCount, setGeneratingCount] = useState(0)
 
   const currentChars = characters.map(c => storeChars.find(s => s.id === c.id) || c)
-  const hasUnprocessed = currentChars.some(c => !c.avatar_url)
+
+  // Аватары только для значимых ролей — безымянных/прочих пропускаем
+  const AVATAR_ROLES = ['protagonist', 'antagonist', 'supporting', 'mentor']
+  const avatarChars = currentChars.filter(c => AVATAR_ROLES.includes(c.role))
+  const hasUnprocessed = avatarChars.some(c => !c.avatar_url)
 
   const handleGenerateAll = async () => {
-    const unprocessed = currentChars.filter(c => !c.avatar_url)
+    const unprocessed = avatarChars.filter(c => !c.avatar_url)
     if (!unprocessed.length || isGeneratingAll) return
 
     setIsGeneratingAll(true)
@@ -31,7 +35,6 @@ export default function CharacterGrid({ characters, bookId }: Props) {
       const char = unprocessed[i]
       setGeneratingCount(i + 1)
 
-      // Small gap between requests to avoid hammering HuggingFace inference API
       if (i > 0) await new Promise(r => setTimeout(r, 1000))
 
       try {
@@ -67,9 +70,9 @@ export default function CharacterGrid({ characters, bookId }: Props) {
       {hasUnprocessed && (
         <div className="flex items-center justify-between mb-4">
           <div className="text-sm text-gray-500 dark:text-gray-400">
-            {isGeneratingAll 
-              ? `Рисую ${generatingCount} из ${currentChars.filter(c => !c.avatar_url).length + generatingCount - 1}...`
-              : `${currentChars.filter(c => !c.avatar_url).length} портретов не сгенерировано`
+            {isGeneratingAll
+              ? `Рисую ${generatingCount} из ${avatarChars.filter(c => !c.avatar_url).length + generatingCount - 1}...`
+              : `${avatarChars.filter(c => !c.avatar_url).length} портретов не сгенерировано`
             }
           </div>
           <button

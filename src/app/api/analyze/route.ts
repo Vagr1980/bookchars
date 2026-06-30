@@ -98,24 +98,33 @@ async function extractChunk(text: string, chunkIndex: number, knownChars: {id: s
     ? `\nALREADY FOUND characters (reuse their exact IDs if you see them again, do NOT create duplicates):\n${knownChars.map(c => `  id="${c.id}" name="${c.name}"`).join('\n')}\n`
     : ''
 
-  const prompt = `Analyze this book/poem fragment and extract ALL characters and their relationships.
+  const prompt = `Analyze this book/poem fragment and extract significant named characters and their relationships.
 ${knownSection}
 RULES:
-1. Extract EVERY named character: heroes, villains, supporting characters, magical creatures, NAMED ANIMALS, spirits — anyone with a name or title
+1. Extract ONLY characters who have a REAL NAME or a recognized title/rank (Prince, General, Doctor, etc.)
    - The TITLE CHARACTER of the book must always be included
-   - In Russian folk tales: named horses, Жар-птица, magical fish, etc. are characters
+   - In Russian folk tales: named animals (Жар-птица, Сивка-Бурка), magical creatures with names — include them
+   - Named animals (horse, dog, bird with a name) — include as characters
+   - NEVER extract anonymous/generic characters like "молодой человек", "пассажир", "чиновник", "старик", "незнакомец", "девушка" without a proper name — assign role "other" only if they are plot-critical and unnamed
    - Do NOT create duplicate characters for the same person with different names/nicknames
 2. If a character from ALREADY FOUND list appears here (even under a nickname/shortened name), reuse their exact id
-3. "appearance" — STRICTLY IN ENGLISH, for AI image generation
-   - Use ONLY details actually mentioned in the text about this character
-   - If appearance is not described, write a plausible description based on their role and the era
-   - MUST reflect the book's cultural/historical setting (19th century Russian novel → period clothing, Russian features)
-   - Animal/creature → describe its animal body (horse, bird — not human clothing)
-   - Make each character VISUALLY DISTINCT: specific hair color, eye color, age, build
+3. "role" assignment — be strict:
+   - protagonist: the main hero(es) the story centers on (1-3 max)
+   - antagonist: the main villain/opposing force (1-2 max)
+   - mentor: guides or teaches the protagonist
+   - supporting: named secondary characters who interact with main characters
+   - other: only for truly minor named characters who appear once or twice
+   - ANONYMOUS characters (no real name) → role MUST be "other"
+4. "appearance" — STRICTLY IN ENGLISH, for AI image generation
+   - Include EXPLICIT AGE or age range (e.g. "young man in his mid-20s", "middle-aged woman around 45")
+   - Use ONLY details actually mentioned in the text; fill gaps plausibly from their role and era
+   - MUST reflect the book's cultural/historical setting (19th century Russian novel → Russian features, period clothing)
+   - Animal/creature → describe its animal body, NOT human clothing
+   - Make each character VISUALLY DISTINCT: specific hair color, eye color, age, build, key feature
    - NEVER write appearance in Russian — always English only
-4. "author" — ONLY the real author's name from the text. If unsure, write null
-5. "description" — RUSSIAN, short character summary
-6. Do NOT invent characters not present in the text
+5. "author" — ONLY the real author's name from the text. If unsure, write null
+6. "description" — RUSSIAN, 1-2 sentence character summary
+7. Do NOT invent characters not present in the text
 
 Return ONLY valid JSON, no markdown:
 {
@@ -126,7 +135,7 @@ Return ONLY valid JSON, no markdown:
       "name": "Character Name",
       "role": "protagonist",
       "role_label": "Главный герой",
-      "appearance": "UNIQUE culturally-accurate physical description in English",
+      "appearance": "Age XX, [hair], [eyes], [build], [clothing era-appropriate], UNIQUE visual feature",
       "description": "Описание персонажа на русском"
     }
   ],
