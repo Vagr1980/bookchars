@@ -92,39 +92,52 @@ function safeParseChunk(raw: string, chunkIndex: number): any | null {
   }
 }
 
-async function extractChunk(text: string, chunkIndex: number, knownChars: {id: string, name: string}[]) {
+async function extractChunk(text: string, chunkIndex: number, knownChars: {id: string, name: string, appearance: string}[]) {
   const isFirst = chunkIndex === 0
+
+  // Передаём подсказку по внешности чтобы LLM мог опознать "белокурый" = Мышкин
   const knownSection = knownChars.length > 0
-    ? `\nALREADY FOUND characters (reuse their exact IDs if you see them again, do NOT create duplicates):\n${knownChars.map(c => `  id="${c.id}" name="${c.name}"`).join('\n')}\n`
+    ? `\nALREADY FOUND characters — if ANY of these appear again (even as a nickname, description, or shortened name), reuse their EXACT id. Do NOT create a new entry:\n${knownChars.map(c => `  id="${c.id}" name="${c.name}"${c.appearance ? ` [looks like: ${c.appearance.slice(0, 100)}]` : ''}`).join('\n')}\n`
     : ''
 
-  const prompt = `Analyze this book/poem fragment and extract significant named characters and their relationships.
+  const prompt = `Extract characters and relationships from this book fragment.
 ${knownSection}
-RULES:
-1. Extract ONLY characters who have a REAL NAME or a recognized title/rank (Prince, General, Doctor, etc.)
-   - The TITLE CHARACTER of the book must always be included
-   - In Russian folk tales: named animals (Жар-птица, Сивка-Бурка), magical creatures with names — include them
-   - Named animals (horse, dog, bird with a name) — include as characters
-   - NEVER extract anonymous/generic characters like "молодой человек", "пассажир", "чиновник", "старик", "незнакомец", "девушка" without a proper name — assign role "other" only if they are plot-critical and unnamed
-   - Do NOT create duplicate characters for the same person with different names/nicknames
-2. If a character from ALREADY FOUND list appears here (even under a nickname/shortened name), reuse their exact id
-3. "role" assignment — be strict:
-   - protagonist: the main hero(es) the story centers on (1-3 max)
-   - antagonist: the main villain/opposing force (1-2 max)
-   - mentor: guides or teaches the protagonist
-   - supporting: named secondary characters who interact with main characters
-   - other: only for truly minor named characters who appear once or twice
-   - ANONYMOUS characters (no real name) → role MUST be "other"
-4. "appearance" — STRICTLY IN ENGLISH, for AI image generation
-   - Include EXPLICIT AGE or age range (e.g. "young man in his mid-20s", "middle-aged woman around 45")
-   - Use ONLY details actually mentioned in the text; fill gaps plausibly from their role and era
-   - MUST reflect the book's cultural/historical setting (19th century Russian novel → Russian features, period clothing)
-   - Animal/creature → describe its animal body, NOT human clothing
-   - Make each character VISUALLY DISTINCT: specific hair color, eye color, age, build, key feature
-   - NEVER write appearance in Russian — always English only
-5. "author" — ONLY the real author's name from the text. If unsure, write null
-6. "description" — RUSSIAN, 1-2 sentence character summary
-7. Do NOT invent characters not present in the text
+━━━ DEDUPLICATION — most critical rule ━━━
+Characters often appear WITHOUT their name first, then get named later.
+Examples: "the fair-haired young man" → later named "Myshkin" = SAME person
+          "червомазый" (nickname) → real name "Rogozhin" = SAME person
+          "генеральша" → full name "Епанчина" = SAME person
+If a physical description or nickname matches an ALREADY FOUND character → use their existing id, do NOT create a new character.
+━━━ HARD EXCLUDE — never extract these ━━━
+× Servants, staff, domestics without a significant named role:
+  камердинер, лакей, дворецкий, горничная, кучер, слуга, швейцар, footman, butler, maid, coachman, groom, doorman
+× Characters who appear only once to perform a single action (open a door, deliver a letter, announce a visitor)
+× Nameless passengers, bystanders, crowd members
+× "чиновник", "полковник", "генерал" WITHOUT a personal name, unless they are major plot characters
+━━━ WHO TO INCLUDE ━━━
+✓ Characters with a personal name (first name, surname, or both)
+✓ Characters with a title + name ("Prince Myshkin", "General Epanchin")
+✓ Named animals and magical creatures in folk tales
+✓ Characters who appear in multiple scenes and affect the plot
+✓ The title character of the book always
+Max ~12 characters total — prefer quality over quantity.
+━━━ ROLES — be strict ━━━
+protagonist: 1-3 main heroes the story centers on
+antagonist: 1-2 main villains/opposing forces
+mentor: character who guides/teaches the protagonist
+supporting: named secondary characters with multiple appearances
+other: ONLY for truly minor named characters (avoid using this role)
+━━━ APPEARANCE — required format ━━━
+STRICTLY IN ENGLISH. Must include:
+• Explicit age: "Age 25", "young man approximately 25 years old", "middle-aged woman around 45", "elderly man in his 70s"
+• Hair color, eye color, build
+• Era-appropriate clothing (19th century Russian → frock coat / dress, NOT modern)
+• One unique visual feature that distinguishes this character
+Example: "Age 26, pale thin young man, light brown hair, large mild grey eyes, slight build, simple traveler's cloak, gentle saintly expression"
+━━━ OTHER FIELDS ━━━
+"author" — ONLY the real author's name from the text; null if unsure
+"description" — RUSSIAN, 1-2 sentences
+Do NOT invent characters not in the text.
 
 Return ONLY valid JSON, no markdown:
 {
@@ -132,22 +145,17 @@ Return ONLY valid JSON, no markdown:
   "characters": [
     {
       "id": "unique_latin_id_no_spaces",
-      "name": "Character Name",
+      "name": "Character Full Name",
       "role": "protagonist",
       "role_label": "Главный герой",
-      "appearance": "Age XX, [hair], [eyes], [build], [clothing era-appropriate], UNIQUE visual feature",
-      "description": "Описание персонажа на русском"
+      "appearance": "Age XX, [hair color], [eye color], [build], [era clothing], [unique feature]",
+      "description": "Краткое описание на русском языке"
     }
   ],
   "relationships": [
-    {
-      "from": "character_id",
-      "to": "character_id",
-      "type": "тип связи на русском"
-    }
+    { "from": "id", "to": "id", "type": "тип связи на русском" }
   ]
 }
-
 Role values: protagonist, antagonist, supporting, mentor, other
 role_label values: Главный герой, Злодей, Второстепенный персонаж, Наставник, Персонаж
 
@@ -167,10 +175,9 @@ async function extractCharacters(text: string) {
   }
 
   const results: any[] = []
-  const knownSoFar: {id: string, name: string}[] = []
+  const knownSoFar: {id: string, name: string, appearance: string}[] = []
   for (let i = 0; i < chunks.length; i++) {
-    // Пауза между запросами — Groq free tier 12k TPM (≈1 запрос/мин)
-    if (i > 0) await new Promise(r => setTimeout(r, 3000)) // 3s gap — 8b has 131k TPM
+    if (i > 0) await new Promise(r => setTimeout(r, 3000))
     let r: any = null
     try { r = await extractChunk(chunks[i], i, knownSoFar) }
     catch (e) { console.warn(`[analyze] chunk ${i} error:`, e) }
@@ -178,7 +185,8 @@ async function extractCharacters(text: string) {
     if (r?.characters) {
       for (const c of r.characters) {
         if (c.id && c.name && !knownSoFar.find(k => k.id === c.id)) {
-          knownSoFar.push({ id: c.id, name: c.name })
+          // Передаём appearance чтобы следующий чанк мог опознать того же персонажа под другим именем
+          knownSoFar.push({ id: c.id, name: c.name, appearance: c.appearance || '' })
         }
       }
     }
@@ -207,7 +215,42 @@ async function extractCharacters(text: string) {
     }
   }
 
-  const allChars = Array.from(charsByName.values())
+  let allChars = Array.from(charsByName.values())
+
+  // Пост-обработка: слияние дублей по подстроке имени
+  // "Епанчина" ⊂ "генеральша Епанчина" → один персонаж
+  // Но "Епанчин" ≠ "Епанчина" (муж и жена) — не сливаем
+  const mergeMap = new Map<string, string>() // shortId → canonicalId
+  for (const shortChar of allChars) {
+    for (const longChar of allChars) {
+      if (shortChar.id === longChar.id) continue
+      const sn = shortChar.name.toLowerCase().trim()
+      const ln = longChar.name.toLowerCase().trim()
+      // longChar содержит shortChar как подстроку, оба имеют одинаковое окончание (гендер)
+      if (ln.includes(sn) && ln.length > sn.length + 2 && sn.length >= 5) {
+        // Убеждаемся что это не разные слова (Епанчин ≠ Епанчина)
+        const snEnd = sn.slice(-1)
+        const lnSuffix = ln.slice(ln.indexOf(sn) + sn.length)
+        if (lnSuffix.length === 0 || lnSuffix.trim() === '') {
+          // "Епанчина" ⊂ "генеральша Епанчина" и суффикс пустой → дубль
+          // Оставляем более длинное/полное имя
+          mergeMap.set(shortChar.id, longChar.id)
+        }
+      }
+    }
+  }
+
+  if (mergeMap.size > 0) {
+    // Применяем ремаппинг для связей
+    for (const remap of idRemaps) {
+      for (const [oldId, newId] of Array.from(remap.entries())) {
+        const canonical = mergeMap.get(newId)
+        if (canonical) remap.set(oldId, canonical)
+      }
+    }
+    // Убираем поглощённые дубли
+    allChars = allChars.filter(c => !mergeMap.has(c.id))
+  }
 
   const allRels: any[] = []
   for (let ri = 0; ri < results.length; ri++) {
