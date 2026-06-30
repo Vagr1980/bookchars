@@ -10,7 +10,7 @@ function getAdminClient() {
 
 const CHUNK = 8000
 const OVERLAP = 800
-const MAX_CHUNKS = 5
+const MAX_CHUNKS = 8  // ~56k символов = ~280 страниц романа
 
 // llama-3.1-8b-instant: 131k TPM — для быстрого извлечения по кускам
 // llama-3.3-70b-versatile: 6k TPM — умный, для финальной консолидации/дедупликации
@@ -122,11 +122,11 @@ If a physical description or nickname matches an ALREADY FOUND character → use
 × "чиновник", "полковник", "генерал" WITHOUT a personal name, unless they are major plot characters
 ━━━ WHO TO INCLUDE ━━━
 ✓ Characters with a personal name (first name, surname, or both)
-✓ Characters with a title + name ("Prince Myshkin", "General Epanchin")
+✓ Characters with a title + name ("Князь Мышкин", "Генерал Епанчин")
 ✓ Named animals and magical creatures in folk tales
 ✓ Characters who appear in multiple scenes and affect the plot
-✓ The title character of the book always
-Max ~12 characters total — prefer quality over quantity.
+✓ The title character of the book ALWAYS, no matter what
+Extract ALL significant named characters from this fragment — do not skip anyone with a real name.
 ━━━ ROLES — be strict ━━━
 protagonist: 1-3 main heroes the story centers on
 antagonist: 1-2 main villains/opposing forces
