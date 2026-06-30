@@ -21,16 +21,23 @@ export default function CharacterCard({ character, isSelected, onClick }: Props)
   const currentChar = characters.find(c => c.id === character.id) || character
   const avatarUrl = currentChar.avatar_url
 
-  const handleGenerateAvatar = (e: React.MouseEvent) => {
+  const handleGenerateAvatar = async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (avatarUrl || loading) return
     setLoading(true)
-    const prompt = encodeURIComponent('Portrait of ' + character.name + '. ' + character.appearance + '. Painterly illustration, soft lighting, detailed face, neutral background, high quality.')
-    const url = 'https://image.pollinations.ai/prompt/' + prompt + '?width=512&height=512&nologo=true&model=flux&seed=' + Date.now()
-    const img = new Image()
-    img.onload = () => { updateCharacterAvatar(character.id, url); setLoading(false) }
-    img.onerror = () => { setLoading(false) }
-    img.src = url
+    try {
+      const res = await fetch('/api/generate-avatar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ character_id: character.id }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.avatar_url) updateCharacterAvatar(character.id, data.avatar_url)
+      }
+    } finally {
+      setLoading(false)
+    }
   }
 
   const cls = isSelected

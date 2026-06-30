@@ -31,8 +31,8 @@ export default function CharacterGrid({ characters, bookId }: Props) {
       const char = unprocessed[i]
       setGeneratingCount(i + 1)
 
-      // Small gap between requests so Pollinations queue clears
-      if (i > 0) await new Promise(r => setTimeout(r, 5000))
+      // Small gap between requests to avoid hammering HuggingFace inference API
+      if (i > 0) await new Promise(r => setTimeout(r, 1000))
 
       try {
         const res = await fetch('/api/generate-avatar', {
