@@ -98,6 +98,25 @@ function safeParseChunk(raw: string, chunkIndex: number): any | null {
   }
 }
 
+// Returns true if name looks like a real proper name vs. a descriptive epithet/nickname
+// "Мышкин" → true, "белокурый" → false, "червомазый" → false
+function isProperName(name: string): boolean {
+  if (!name) return false
+  const n = name.trim()
+  // Proper names start with a capital letter and aren't just adjectives/common nouns
+  const descriptivePatterns = [
+    /^(белокурый|черноволосый|темноволосый|рыжий|лысый|молодой|старый|высокий|толстый|худой|маленький)/i,
+    /^(червомазый|горбатый|хромой|кривой|слепой)/i,
+    /^(незнакомец|незнакомка|молодой человек|старик|старуха|юноша|девушка|дама|господин|госпожа|барин|барыня)$/i,
+    /^(чиновник|полковник|генерал|офицер|доктор|профессор)$/i,
+  ]
+  for (const p of descriptivePatterns) {
+    if (p.test(n)) return false
+  }
+  // Proper name: starts with capital, contains a real name-like word
+  return /^[А-ЯЁA-Z]/.test(n)
+}
+
 async function extractChunk(text: string, chunkIndex: number, knownChars: {id: string, name: string, appearance: string}[]) {
   const isFirst = chunkIndex === 0
 
@@ -193,19 +212,30 @@ async function consolidateCharacters(chars: any[]): Promise<string[]> {
     `id="${c.id}" | name="${c.name}" | appearance="${(c.appearance || '').slice(0, 120)}" | desc="${(c.description || '').slice(0, 80)}"`
   ).join('\n')
 
-  const prompt = `These characters were extracted from a book in separate passes. Some entries are DUPLICATES — the same person appearing under a description first, then named later.
+  const prompt = `These characters were extracted from different parts of a book. Find DUPLICATES — same person listed twice under different names.
 
-Examples of duplicates:
-- "белокурый молодой человек" (unnamed description) = "Князь Мышкин" (same person, named later)
-- "червомазый" (nickname) = "Рогожин" (real name revealed later)
-- "генеральша" = "Епанчина" (same woman, different forms of address)
+━━━ MOST COMMON DUPLICATE PATTERNS ━━━
+1. DESCRIPTIVE NAME → REAL NAME (most important to catch):
+   "белокурый" / "белокурый молодой человек" / "fair-haired man" → "Мышкин" or "Князь Мышкин"
+   "черноволосый" / "черномазый" / "червомазый" → "Рогожин" or whoever is the dark-haired character
+   "молодой человек" / "незнакомец" → any named character matching the description
+2. NICKNAME → REAL NAME:
+   "идиот" (what people call him) → the protagonist with that nickname
+   "красавица" → a named beautiful character
+3. PARTIAL NAME → FULL NAME:
+   "Настасья" = "Настасья Филипповна"  |  "Аглая" = "Аглая Епанчина"
+4. TITLE WITHOUT NAME → NAMED CHARACTER:
+   "генеральша" = "Епанчина"  |  "князь" = "Мышкин"
+
+━━━ RULE ━━━
+If two entries likely refer to the same person (same gender, similar age/hair/build), they are duplicates.
+KEEP the entry with the most complete REAL NAME. DELETE the descriptive/partial/nickname entry.
+Do NOT merge different characters (e.g. "Генерал Епанчин" ≠ "генеральша Епанчина" — they are husband and wife).
 
 Character list:
 ${list}
 
-Find all duplicate pairs/groups. For each duplicate group, keep the entry with the most complete REAL NAME (e.g. keep "Князь Лев Николаевич Мышкин", delete "белокурый").
-
-Return ONLY a JSON array of IDs to DELETE (the less complete duplicates). If no duplicates, return [].
+Return ONLY a JSON array of IDs to DELETE. If no duplicates found, return [].
 Example: ["id1", "id2"]`
 
   try {
@@ -255,8 +285,18 @@ async function extractCharacters(text: string) {
     results.push(r)
     if (r?.characters) {
       for (const c of r.characters) {
-        if (c.id && c.name && !knownSoFar.find(k => k.id === c.id)) {
-          // Передаём appearance чтобы следующий чанк мог опознать того же персонажа под другим именем
+        if (!c.id || !c.name) continue
+        const existing = knownSoFar.find(k => k.id === c.id)
+        if (existing) {
+          // Bug fix: update name when LLM found a real name for a previously descriptive entry
+          // e.g. "белокурый" → "Мышкин" (same id, now has proper name)
+          if (c.name.length > existing.name.length || isProperName(c.name)) {
+            existing.name = c.name
+          }
+          if (c.appearance && c.appearance.length > existing.appearance.length) {
+            existing.appearance = c.appearance
+          }
+        } else {
           knownSoFar.push({ id: c.id, name: c.name, appearance: c.appearance || '' })
         }
       }
@@ -273,6 +313,28 @@ async function extractCharacters(text: string) {
     for (const c of (r.characters || [])) {
       const key = c.name?.toLowerCase().trim()
       if (!key) continue
+
+      // Bug fix: check if LLM reused an existing ID (same person, now with real name)
+      // e.g. chunk 0: {id:"belokyry", name:"белокурый"}, chunk 1: {id:"belokyry", name:"Мышкин"}
+      const existingById = Array.from(charsByName.values()).find((x: any) => x.id === c.id)
+      if (existingById) {
+        const oldKey = existingById.name.toLowerCase().trim()
+        if (oldKey !== key) {
+          // Same person, now has a real/better name — update the entry
+          charsByName.delete(oldKey)
+          const updated = {
+            ...existingById,
+            name: c.name,
+            role: c.role !== 'other' ? c.role : existingById.role,
+            description: c.description || existingById.description,
+            appearance: (c.appearance?.length ?? 0) > (existingById.appearance?.length ?? 0) ? c.appearance : existingById.appearance,
+          }
+          charsByName.set(key, updated)
+        }
+        idRemaps[ri].set(c.id, existingById.id)
+        continue
+      }
+
       if (!charsByName.has(key)) {
         let safeId = c.id
         const taken = new Set(Array.from(charsByName.values()).map((x: any) => x.id))
