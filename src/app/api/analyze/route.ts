@@ -166,6 +166,46 @@ ${text}`
   return safeParseChunk(raw, chunkIndex)
 }
 
+// Финальный шаг: LLM смотрит на ВЕСЬ список и семантически сливает дубли.
+// "белокурый молодой человек" + "Князь Мышкин" = один персонаж.
+// Один лёгкий запрос (~300 токенов), без текста книги.
+async function consolidateCharacters(chars: any[]): Promise<string[]> {
+  if (chars.length <= 2) return []
+
+  const list = chars.map(c =>
+    `id="${c.id}" | name="${c.name}" | appearance="${(c.appearance || '').slice(0, 120)}" | desc="${(c.description || '').slice(0, 80)}"`
+  ).join('\n')
+
+  const prompt = `These characters were extracted from a book in separate passes. Some entries are DUPLICATES — the same person appearing under a description first, then named later.
+
+Examples of duplicates:
+- "белокурый молодой человек" (unnamed description) = "Князь Мышкин" (same person, named later)
+- "червомазый" (nickname) = "Рогожин" (real name revealed later)
+- "генеральша" = "Епанчина" (same woman, different forms of address)
+
+Character list:
+${list}
+
+Find all duplicate pairs/groups. For each duplicate group, keep the entry with the most complete REAL NAME (e.g. keep "Князь Лев Николаевич Мышкин", delete "белокурый").
+
+Return ONLY a JSON array of IDs to DELETE (the less complete duplicates). If no duplicates, return [].
+Example: ["id1", "id2"]`
+
+  try {
+    const raw = await groqText(prompt)
+    const clean = raw.replace(/```json|```/g, '').trim()
+    const start = clean.indexOf('[')
+    const end = clean.lastIndexOf(']')
+    if (start === -1 || end === -1) return []
+    const ids: string[] = JSON.parse(clean.slice(start, end + 1))
+    console.log(`[analyze] consolidation removed ${ids.length} duplicates:`, ids)
+    return Array.isArray(ids) ? ids : []
+  } catch (e) {
+    console.warn('[analyze] consolidation failed:', e)
+    return []
+  }
+}
+
 async function extractCharacters(text: string) {
   const chunks: string[] = []
   let pos = 0
@@ -241,15 +281,22 @@ async function extractCharacters(text: string) {
   }
 
   if (mergeMap.size > 0) {
-    // Применяем ремаппинг для связей
     for (const remap of idRemaps) {
       for (const [oldId, newId] of Array.from(remap.entries())) {
         const canonical = mergeMap.get(newId)
         if (canonical) remap.set(oldId, canonical)
       }
     }
-    // Убираем поглощённые дубли
     allChars = allChars.filter(c => !mergeMap.has(c.id))
+  }
+
+  // Финальная семантическая консолидация — LLM сливает смысловые дубли
+  // ("белокурый" = Мышкин, "червомазый" = Рогожин и т.п.)
+  await new Promise(r => setTimeout(r, 3000)) // пауза перед доп. запросом к Groq
+  const dupIdsToRemove = await consolidateCharacters(allChars)
+  if (dupIdsToRemove.length > 0) {
+    const dupSet = new Set(dupIdsToRemove)
+    allChars = allChars.filter(c => !dupSet.has(c.id))
   }
 
   const allRels: any[] = []
