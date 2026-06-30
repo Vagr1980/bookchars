@@ -8,12 +8,17 @@ function getAdminClient() {
   return createSupabase(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 }
 
-const CHUNK = 8000    // llama-3.1-8b-instant: 131k TPM — 8k chars ≈ 6k tokens, fits easily
+const CHUNK = 8000
 const OVERLAP = 800
-const MAX_CHUNKS = 5  // покрываем ~36k символов = ~180 страниц книги
+const MAX_CHUNKS = 5
 
-// Groq — llama-3.1-8b-instant: 500k TPD / 131k TPM (5x больше чем 70b)
-async function groqText(prompt: string): Promise<string> {
+// llama-3.1-8b-instant: 131k TPM — для быстрого извлечения по кускам
+// llama-3.3-70b-versatile: 6k TPM — умный, для финальной консолидации/дедупликации
+async function groqCall(prompt: string, model: 'fast' | 'smart'): Promise<string> {
+  const modelId = model === 'smart'
+    ? 'llama-3.3-70b-versatile'   // умный: лучше понимает смысл, находит дубли
+    : 'llama-3.1-8b-instant'      // быстрый: много токенов/мин, для чанков
+
   for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -22,9 +27,9 @@ async function groqText(prompt: string): Promise<string> {
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
+        model: modelId,
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 2000,
+        max_tokens: model === 'smart' ? 1000 : 2000,
         temperature: 0.1,
       }),
     })
@@ -32,12 +37,10 @@ async function groqText(prompt: string): Promise<string> {
     if (res.status === 429) {
       const data = await res.json().catch(() => ({}))
       const msg: string = data?.error?.message || ''
-      // TPD (daily) limit — no point retrying today
       if (msg.includes('per day') || msg.includes('TPD')) {
         const mins = (msg.match(/try again in (\d+)m/) || [])[1]
         throw new Error(`Дневной лимит Groq исчерпан. Попробуйте через ${mins ? mins + ' минут' : 'час'}.`)
       }
-      // TPM (per-minute) limit — wait using retry-after header
       const wait = parseInt(res.headers.get('retry-after') || '65') * 1000
       if (attempt < 2) { await new Promise(r => setTimeout(r, wait)); continue }
       throw new Error(`Groq rate limit: ${msg}`)
@@ -49,6 +52,9 @@ async function groqText(prompt: string): Promise<string> {
   }
   throw new Error('Groq: превышено число попыток')
 }
+
+// Обёртки для обратной совместимости
+const groqText = (prompt: string) => groqCall(prompt, 'fast')
 
 function safeParseChunk(raw: string, chunkIndex: number): any | null {
   const clean = raw.replace(/```json|```/g, '').trim()
@@ -135,6 +141,9 @@ STRICTLY IN ENGLISH. Must include:
 • One unique visual feature that distinguishes this character
 Example: "Age 26, pale thin young man, light brown hair, large mild grey eyes, slight build, simple traveler's cloak, gentle saintly expression"
 ━━━ OTHER FIELDS ━━━
+"name" — character name IN THE ORIGINAL LANGUAGE of the book.
+  Russian book → Russian name: "Князь Мышкин", NOT "Prince Myshkin"
+  English book → English name: "Harry Potter"
 "author" — ONLY the real author's name from the text; null if unsure
 "description" — RUSSIAN, 1-2 sentences
 Do NOT invent characters not in the text.
@@ -145,7 +154,7 @@ Return ONLY valid JSON, no markdown:
   "characters": [
     {
       "id": "unique_latin_id_no_spaces",
-      "name": "Character Full Name",
+      "name": "Имя персонажа на языке оригинала",
       "role": "protagonist",
       "role_label": "Главный герой",
       "appearance": "Age XX, [hair color], [eye color], [build], [era clothing], [unique feature]",
@@ -192,13 +201,14 @@ Return ONLY a JSON array of IDs to DELETE (the less complete duplicates). If no 
 Example: ["id1", "id2"]`
 
   try {
-    const raw = await groqText(prompt)
+    // Используем умную модель — она лучше понимает смысловые совпадения
+    const raw = await groqCall(prompt, 'smart')
     const clean = raw.replace(/```json|```/g, '').trim()
     const start = clean.indexOf('[')
     const end = clean.lastIndexOf(']')
     if (start === -1 || end === -1) return []
     const ids: string[] = JSON.parse(clean.slice(start, end + 1))
-    console.log(`[analyze] consolidation removed ${ids.length} duplicates:`, ids)
+    console.log(`[analyze] consolidation (70b) removed ${ids.length} duplicates:`, ids)
     return Array.isArray(ids) ? ids : []
   } catch (e) {
     console.warn('[analyze] consolidation failed:', e)
