@@ -37,43 +37,45 @@ function detectBookStyle(title: string, author: string): string {
   return 'painterly book illustration style, professional character art'
 }
 
-// Together.ai FLUX.1-schnell-Free — бесплатная модель, хорошее качество,
-// работает из Vercel serverless (в отличие от HuggingFace inference API)
-async function generateImage(prompt: string): Promise<{ base64: string; mimeType: string }> {
-  const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY
-
-  if (TOGETHER_API_KEY) {
-    // Together.ai — FLUX.1-schnell-Free (бесплатная)
-    const res = await fetch('https://api.together.xyz/v1/images/generations', {
+// Cloudflare Workers AI — FLUX.1-schnell, 10k запросов/день бесплатно
+// Нужны CF_ACCOUNT_ID и CF_API_TOKEN из Cloudflare Dashboard (карта не нужна)
+async function generateWithCloudflare(prompt: string, accountId: string, apiToken: string): Promise<{ base64: string; mimeType: string }> {
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
+    {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${TOGETHER_API_KEY}`,
+        'Authorization': `Bearer ${apiToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'black-forest-labs/FLUX.1-schnell-Free',
-        prompt: prompt.slice(0, 1024),
-        width: 512,
-        height: 768,
-        steps: 4,
-        n: 1,
-        response_format: 'b64_json',
-      }),
+      body: JSON.stringify({ prompt: prompt.slice(0, 2048), num_steps: 8 }),
       signal: AbortSignal.timeout(60000),
-    })
-
-    if (res.ok) {
-      const data = await res.json()
-      const b64 = data?.data?.[0]?.b64_json
-      if (b64) return { base64: b64, mimeType: 'image/jpeg' }
     }
-    // fallthrough to Pollinations on error
-    console.warn('[generate-avatar] Together.ai failed, falling back to Pollinations')
+  )
+
+  if (!res.ok) throw new Error(`Cloudflare AI ${res.status}: ${(await res.text()).slice(0, 200)}`)
+
+  // CF возвращает бинарный PNG напрямую
+  const buf = await res.arrayBuffer()
+  return { base64: Buffer.from(buf).toString('base64'), mimeType: 'image/png' }
+}
+
+// Провайдеры по приоритету: Cloudflare → Pollinations (fallback)
+async function generateImage(prompt: string): Promise<{ base64: string; mimeType: string }> {
+  const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID
+  const CF_API_TOKEN  = process.env.CF_API_TOKEN
+
+  if (CF_ACCOUNT_ID && CF_API_TOKEN) {
+    try {
+      return await generateWithCloudflare(prompt, CF_ACCOUNT_ID, CF_API_TOKEN)
+    } catch (e) {
+      console.warn('[generate-avatar] Cloudflare failed, fallback to Pollinations:', e)
+    }
   }
 
-  // Fallback: Pollinations.ai
+  // Fallback: Pollinations.ai с enhance=true (LLM улучшает промпт перед генерацией)
   const seed = Math.floor(Math.random() * 999999)
-  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 500))}?width=512&height=768&nologo=true&model=flux&seed=${seed}`
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 500))}?width=512&height=768&nologo=true&model=flux&enhance=true&seed=${seed}`
 
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 15000))
