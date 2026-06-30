@@ -37,30 +37,86 @@ function detectBookStyle(title: string, author: string): string {
   return 'painterly book illustration style, professional character art'
 }
 
-// Pollinations.ai FLUX — бесплатно, без ключей, работает из Vercel serverless
-// Note: HuggingFace inference API недоступен с Vercel Hobby (ENOTFOUND на DNS-резолюции)
-async function generateWithPollinations(prompt: string): Promise<{ base64: string; mimeType: string }> {
-  const safePrompt = prompt.slice(0, 500)
-  const seed = Math.floor(Math.random() * 999999)
-  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(safePrompt)}?width=512&height=768&nologo=true&model=flux&seed=${seed}`
+// Together.ai FLUX.1-schnell-Free — бесплатная модель, хорошее качество,
+// работает из Vercel serverless (в отличие от HuggingFace inference API)
+async function generateImage(prompt: string): Promise<{ base64: string; mimeType: string }> {
+  const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (attempt > 0) await new Promise(r => setTimeout(r, [10000, 20000, 35000][attempt - 1]))
+  if (TOGETHER_API_KEY) {
+    // Together.ai — FLUX.1-schnell-Free (бесплатная)
+    const res = await fetch('https://api.together.xyz/v1/images/generations', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${TOGETHER_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'black-forest-labs/FLUX.1-schnell-Free',
+        prompt: prompt.slice(0, 1024),
+        width: 512,
+        height: 768,
+        steps: 4,
+        n: 1,
+        response_format: 'b64_json',
+      }),
+      signal: AbortSignal.timeout(60000),
+    })
 
-    const res = await fetch(url, { signal: AbortSignal.timeout(55000) })
-
-    if (res.status === 429) {
-      if (attempt < 3) continue
-      throw new Error('Pollinations: очередь переполнена, попробуйте позже')
+    if (res.ok) {
+      const data = await res.json()
+      const b64 = data?.data?.[0]?.b64_json
+      if (b64) return { base64: b64, mimeType: 'image/jpeg' }
     }
-
-    if (!res.ok) throw new Error(`Pollinations error ${res.status}`)
-
-    const buf = await res.arrayBuffer()
-    const mimeType = res.headers.get('content-type') || 'image/jpeg'
-    return { base64: Buffer.from(buf).toString('base64'), mimeType }
+    // fallthrough to Pollinations on error
+    console.warn('[generate-avatar] Together.ai failed, falling back to Pollinations')
   }
-  throw new Error('Pollinations: превышено число попыток')
+
+  // Fallback: Pollinations.ai
+  const seed = Math.floor(Math.random() * 999999)
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 500))}?width=512&height=768&nologo=true&model=flux&seed=${seed}`
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 15000))
+    const res = await fetch(url, { signal: AbortSignal.timeout(55000) })
+    if (res.status === 429) { if (attempt < 2) continue; throw new Error('Pollinations: очередь переполнена') }
+    if (!res.ok) throw new Error(`Pollinations error ${res.status}`)
+    const buf = await res.arrayBuffer()
+    return { base64: Buffer.from(buf).toString('base64'), mimeType: res.headers.get('content-type') || 'image/jpeg' }
+  }
+  throw new Error('Не удалось сгенерировать изображение')
+}
+
+// Вытаскиваем явный возраст из текстовых описаний или угадываем по роли
+function inferAge(appearance: string, description: string, role: string): string {
+  const src = (appearance + ' ' + description).toLowerCase()
+
+  // Явный возраст числом: "25 лет", "27 years", "26-летний"
+  const numAge = src.match(/\b(\d{1,2})[- ]?(?:лет|год|year|летн)/)?.[1]
+  if (numAge) return `${numAge}-year-old`
+
+  // Слова возраста
+  if (/\b(юный|молодой|young|youth|teenager|подросток|юноша)\b/.test(src)) return 'young adult, in his 20s'
+  if (/\b(пожилой|старый|elderly|старик|старуха|old man|old woman)\b/.test(src)) return 'elderly'
+  if (/\b(средних лет|middle.aged|зрелый)\b/.test(src)) return 'middle-aged'
+  if (/\b(ребёнок|ребенок|child|мальчик|девочка|boy|girl)\b/.test(src)) return 'child'
+
+  // По умолчанию исходя из роли
+  if (role === 'protagonist') return 'young adult'
+  if (role === 'mentor') return 'middle-aged'
+  return 'adult'
+}
+
+function buildFinalPrompt(name: string, appearance: string, description: string, role: string, bookStyle: string): string {
+  const age = inferAge(appearance, description || '', role)
+
+  // Структура: возраст + внешность + стиль — модель должна чётко следовать возрасту
+  return [
+    `Portrait of ${name}, ${age},`,
+    appearance,
+    `${bookStyle}.`,
+    'Highly detailed face, expressive eyes, upper body, soft lighting, neutral background,',
+    'professional book character illustration, high quality.',
+  ].join(' ')
 }
 
 export async function POST(req: NextRequest) {
@@ -99,9 +155,9 @@ export async function POST(req: NextRequest) {
     // appearance уже содержит детальное описание на английском из этапа анализа.
     const avatarPrompt = character.avatar_prompt || character.appearance
 
-    // ── 5. Генерируем изображение через Pollinations.ai FLUX ─────────────────
-    const fullPrompt = `Portrait of ${character.name}. ${avatarPrompt}. ${bookStyle}. Soft lighting, detailed face, neutral background, high quality portrait.`
-    const image = await generateWithPollinations(fullPrompt)
+    // ── 5. Строим промпт: явно указываем возраст чтобы модель не угадывала ───
+    const fullPrompt = buildFinalPrompt(character.name, avatarPrompt, character.description, character.role, bookStyle)
+    const image = await generateImage(fullPrompt)
 
     // ── 6. Загружаем в Supabase Storage ──────────────────────────────────────
     const avatarUrl = await uploadAvatarToStorage(image.base64, image.mimeType, character_id)
