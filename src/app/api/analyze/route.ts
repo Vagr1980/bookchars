@@ -140,11 +140,19 @@ STRICTLY IN ENGLISH. Must include:
 • Era-appropriate clothing (19th century Russian → frock coat / dress, NOT modern)
 • One unique visual feature that distinguishes this character
 Example: "Age 26, pale thin young man, light brown hair, large mild grey eyes, slight build, simple traveler's cloak, gentle saintly expression"
+━━━ RELATIONSHIPS — use SPECIFIC types, never generic "встреча" ━━━
+For the "type" field pick the most accurate label from these examples:
+  Семья: отец/дочь, мать/сын, брат/сестра, муж/жена, дядя/племянник, родственники
+  Чувства: любовь, влюблённость, взаимная любовь, безответная любовь, страсть, ревность, ненависть, презрение
+  Личные: друзья, лучшие друзья, соперники, враги, знакомые, покровитель/подопечный
+  Власть: благодетель/должник, хозяин/слуга, работодатель/работник, опекун/подопечный
+  Сюжет: соперники за любовь, деловые партнёры, сообщники, преследователь/жертва, спаситель/спасённый
+Only add relationships that are CLEARLY shown in this fragment. 2-3 well-typed relations are better than 10 generic ones.
 ━━━ OTHER FIELDS ━━━
 "name" — character name IN THE ORIGINAL LANGUAGE of the book.
   Russian book → Russian name: "Князь Мышкин", NOT "Prince Myshkin"
   English book → English name: "Harry Potter"
-"author" — ONLY the real author's name from the text; null if unsure
+"author" — ONLY the real author's name explicitly mentioned in the text; null if not explicitly stated
 "description" — RUSSIAN, 1-2 sentences
 Do NOT invent characters not in the text.
 
@@ -218,10 +226,23 @@ Example: ["id1", "id2"]`
 
 async function extractCharacters(text: string) {
   const chunks: string[] = []
-  let pos = 0
-  while (pos < text.length && chunks.length < MAX_CHUNKS) {
-    chunks.push(text.slice(pos, pos + CHUNK))
-    pos += CHUNK - OVERLAP
+  const shortText = text.length <= MAX_CHUNKS * (CHUNK - OVERLAP)
+  if (shortText) {
+    // Short text: sequential chunks with overlap (covers everything)
+    let pos = 0
+    while (pos < text.length && chunks.length < MAX_CHUNKS) {
+      chunks.push(text.slice(pos, pos + CHUNK))
+      pos += CHUNK - OVERLAP
+    }
+  } else {
+    // Long text: distribute chunks evenly across the FULL text
+    // e.g. 300k chars, 8 chunks: positions at 0%, 14%, 28%, 42%, 57%, 71%, 85%, 100%-CHUNK
+    const step = Math.floor((text.length - CHUNK) / (MAX_CHUNKS - 1))
+    for (let i = 0; i < MAX_CHUNKS; i++) {
+      const pos = i === MAX_CHUNKS - 1 ? text.length - CHUNK : i * step
+      chunks.push(text.slice(pos, pos + CHUNK))
+    }
+    console.log(`[analyze] long text ${text.length} chars → ${MAX_CHUNKS} distributed chunks, step=${step}`)
   }
 
   const results: any[] = []
@@ -390,7 +411,8 @@ export async function POST(req: NextRequest) {
     await supabase.from('books').update({
       status: 'done',
       title: extracted.title || title || 'Без названия',
-      author: extracted.author || author || null,
+      // User-provided author always takes priority over LLM extraction
+      author: author || extracted.author || null,
       characters_count: savedChars.length,
     }).eq('id', book.id)
 

@@ -17,7 +17,17 @@ export default function CharacterGrid({ characters, bookId }: Props) {
   const [isGeneratingAll, setIsGeneratingAll] = useState(false)
   const [generatingCount, setGeneratingCount] = useState(0)
 
-  const currentChars = characters.map(c => storeChars.find(s => s.id === c.id) || c)
+  const ROLE_ORDER: Record<string, number> = {
+    protagonist: 0,
+    antagonist: 1,
+    mentor: 2,
+    supporting: 3,
+    other: 4,
+  }
+
+  const currentChars = characters
+    .map(c => storeChars.find(s => s.id === c.id) || c)
+    .sort((a, b) => (ROLE_ORDER[a.role] ?? 5) - (ROLE_ORDER[b.role] ?? 5))
 
   // Аватары только для значимых ролей — безымянных/прочих пропускаем
   const AVATAR_ROLES = ['protagonist', 'antagonist', 'supporting', 'mentor']
@@ -86,7 +96,7 @@ export default function CharacterGrid({ characters, bookId }: Props) {
         </div>
       )}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-        {characters.map((char) => (
+        {currentChars.map((char) => (
           <CharacterCard
             key={char.id}
             character={char}
