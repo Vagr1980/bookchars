@@ -37,46 +37,30 @@ function detectBookStyle(title: string, author: string): string {
   return 'painterly book illustration style, professional character art'
 }
 
-// Hugging Face FLUX.1-schnell — бесплатно, 1000 картинок/день, без очередей по IP
-async function generateWithHuggingFace(prompt: string): Promise<{ base64: string; mimeType: string }> {
-  const HF_TOKEN = process.env.HF_TOKEN
-  if (!HF_TOKEN) throw new Error('HF_TOKEN не задан')
-
+// Pollinations.ai FLUX — бесплатно, без ключей, работает из Vercel serverless
+// Note: HuggingFace inference API недоступен с Vercel Hobby (ENOTFOUND на DNS-резолюции)
+async function generateWithPollinations(prompt: string): Promise<{ base64: string; mimeType: string }> {
   const safePrompt = prompt.slice(0, 500)
+  const seed = Math.floor(Math.random() * 999999)
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(safePrompt)}?width=512&height=768&nologo=true&model=flux&seed=${seed}`
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 20000)) // 20s, 40s — модель может грузиться
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, [10000, 20000, 35000][attempt - 1]))
 
-    const res = await fetch('https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${HF_TOKEN}`,
-        'Content-Type': 'application/json',
-        'x-wait-for-model': 'true',
-      },
-      body: JSON.stringify({
-        inputs: safePrompt,
-        parameters: { width: 512, height: 768 },
-      }),
-      signal: AbortSignal.timeout(60000),
-    })
+    const res = await fetch(url, { signal: AbortSignal.timeout(55000) })
 
-    // 503 = модель ещё грузится — ждём и повторяем
-    if (res.status === 503) {
-      if (attempt < 2) continue
-      throw new Error('HuggingFace: модель не ответила вовремя')
+    if (res.status === 429) {
+      if (attempt < 3) continue
+      throw new Error('Pollinations: очередь переполнена, попробуйте позже')
     }
 
-    if (!res.ok) {
-      const err = await res.text()
-      throw new Error(`HuggingFace error ${res.status}: ${err.slice(0, 200)}`)
-    }
+    if (!res.ok) throw new Error(`Pollinations error ${res.status}`)
 
     const buf = await res.arrayBuffer()
     const mimeType = res.headers.get('content-type') || 'image/jpeg'
     return { base64: Buffer.from(buf).toString('base64'), mimeType }
   }
-  throw new Error('HuggingFace: превышено число попыток')
+  throw new Error('Pollinations: превышено число попыток')
 }
 
 export async function POST(req: NextRequest) {
@@ -115,9 +99,9 @@ export async function POST(req: NextRequest) {
     // appearance уже содержит детальное описание на английском из этапа анализа.
     const avatarPrompt = character.avatar_prompt || character.appearance
 
-    // ── 5. Генерируем изображение через Hugging Face FLUX.1-schnell ──────────
+    // ── 5. Генерируем изображение через Pollinations.ai FLUX ─────────────────
     const fullPrompt = `Portrait of ${character.name}. ${avatarPrompt}. ${bookStyle}. Soft lighting, detailed face, neutral background, high quality portrait.`
-    const image = await generateWithHuggingFace(fullPrompt)
+    const image = await generateWithPollinations(fullPrompt)
 
     // ── 6. Загружаем в Supabase Storage ──────────────────────────────────────
     const avatarUrl = await uploadAvatarToStorage(image.base64, image.mimeType, character_id)
