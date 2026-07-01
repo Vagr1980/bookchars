@@ -10,8 +10,36 @@ function getAdminClient() {
 
 const CHUNK = 8000
 const OVERLAP = 800
-const MAX_CHUNKS = 8  // ~56k символов = ~280 страниц романа
+const MAX_CHUNKS = 8  // fallback: Groq chunked mode
 
+// ── MiMo V2.5 Pro (primary) ──────────────────────────────────────────────────
+// 1M token context → весь роман за ОДИН запрос, без чанков и дублей
+const MIMO_BASE  = 'https://api.xiaomimimo.com/v1'
+const MIMO_MODEL = 'mimo-v2.5-pro'
+
+async function mimoCall(prompt: string): Promise<string> {
+  const res = await fetch(`${MIMO_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.MIMO_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: MIMO_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 6000,
+      temperature: 0.1,
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`MiMo ${res.status}: ${err}`)
+  }
+  const data = await res.json()
+  return data?.choices?.[0]?.message?.content ?? ''
+}
+
+// ── Groq (fallback) ───────────────────────────────────────────────────────────
 // llama-3.1-8b-instant: 131k TPM — для быстрого извлечения по кускам
 // llama-3.3-70b-versatile: 6k TPM — умный, для финальной консолидации/дедупликации
 async function groqCall(prompt: string, model: 'fast' | 'smart'): Promise<string> {
@@ -255,6 +283,71 @@ Example: ["id1", "id2"]`
   }
 }
 
+// ── MiMo: full-text single-pass extraction ───────────────────────────────────
+// Отправляем ВЕСЬ текст одним запросом. Нет чанков → нет дублей → нет галлюцинаций.
+async function extractCharactersWithMimo(text: string) {
+  const prompt = `You are a literary analyst. Read the ENTIRE book text below and extract ALL significant characters and their relationships.
+
+━━━ WHO TO INCLUDE ━━━
+✓ Characters who SPEAK (have dialogue)
+✓ Characters DESCRIBED IN DETAIL (appearance, thoughts, emotions, motivations)
+✓ Characters who ACTIVELY AFFECT THE PLOT across multiple scenes
+✓ The title character ALWAYS
+✗ NEVER include characters only mentioned in passing (one brief mention, no dialogue, no description)
+✗ NEVER include anonymous servants, crowd members, or one-time messengers
+
+━━━ STRICT DEDUPLICATION ━━━
+You have the FULL text — a character can only appear once. If the same person is called by nickname early on and by real name later, use their REAL NAME and merge into one entry.
+Examples: "белокурый" early = "Князь Мышкин" later → ONE entry named "Князь Мышкин"
+          "червомазый" = "Рогожин" → ONE entry named "Рогожин"
+
+━━━ ROLES ━━━
+protagonist: 1-3 main heroes the story revolves around
+antagonist: main villain/opposing force
+mentor: character who guides the protagonist
+supporting: named secondary characters with multiple scenes
+other: only truly minor named characters (use sparingly)
+
+━━━ APPEARANCE — required, STRICTLY IN ENGLISH ━━━
+Must include: explicit age ("Age 26"), hair color, eye color, build, era-appropriate clothing, one unique feature.
+Example: "Age 26, pale thin young man, light brown hair, large mild grey eyes, slight build, simple traveler's cloak, gentle saintly expression"
+
+━━━ RELATIONSHIPS — use SPECIFIC types ━━━
+Семья: отец/дочь, мать/сын, брат/сестра, муж/жена
+Чувства: любовь, влюблённость, безответная любовь, страсть, ревность, ненависть
+Личные: друзья, соперники, враги, покровитель/подопечный
+Сюжет: соперники за любовь, благодетель/должник, преследователь/жертва
+
+Return ONLY valid JSON, no markdown, no explanation:
+{
+  "title": "название книги",
+  "author": "автор или null",
+  "characters": [
+    {
+      "id": "unique_latin_id_no_spaces",
+      "name": "Имя на языке оригинала",
+      "role": "protagonist",
+      "role_label": "Главный герой",
+      "appearance": "Age XX, [English appearance description]",
+      "description": "1-2 предложения на русском"
+    }
+  ],
+  "relationships": [
+    { "from": "id1", "to": "id2", "type": "тип связи" }
+  ]
+}
+role_label values: Главный герой, Злодей, Второстепенный персонаж, Наставник, Персонаж
+
+━━━ BOOK TEXT ━━━
+${text}`
+
+  const raw = await mimoCall(prompt)
+  const parsed = safeParseChunk(raw, 0)
+  if (!parsed) throw new Error('MiMo: не удалось разобрать ответ')
+  console.log(`[analyze] MiMo extracted ${parsed.characters?.length ?? 0} characters, ${parsed.relationships?.length ?? 0} relationships`)
+  return parsed
+}
+
 async function extractCharacters(text: string) {
   const chunks: string[] = []
   const shortText = text.length <= MAX_CHUNKS * (CHUNK - OVERLAP)
@@ -465,7 +558,20 @@ export async function POST(req: NextRequest) {
       .select().single()
     if (bookError) throw new Error('Ошибка создания книги: ' + bookError.message)
 
-    const extracted = await extractCharacters(text)
+    // Use MiMo (full-text, 1M context) if available, otherwise fall back to Groq (chunked)
+    let extracted: any
+    if (process.env.MIMO_API_KEY) {
+      console.log('[analyze] using MiMo V2.5 Pro (full-text single-pass)')
+      try {
+        extracted = await extractCharactersWithMimo(text)
+      } catch (e) {
+        console.warn('[analyze] MiMo failed, falling back to Groq:', e)
+        extracted = await extractCharacters(text)
+      }
+    } else {
+      console.log('[analyze] MIMO_API_KEY not set — using Groq (chunked)')
+      extracted = await extractCharacters(text)
+    }
     const characters = extracted.characters || []
     const relationships = extracted.relationships || []
 
