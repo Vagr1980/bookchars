@@ -48,7 +48,7 @@ export default function CharacterCard({ character, isSelected, onClick }: Props)
     <div onClick={onClick} className={'group relative bg-white dark:bg-gray-900 rounded-2xl border cursor-pointer transition-all duration-200 overflow-hidden ' + cls}>
       <div className="relative aspect-square overflow-hidden bg-gray-50 dark:bg-gray-800">
         {avatarUrl ? (
-          <img src={avatarUrl} alt={character.name} style={{width:'100%',height:'100%',objectFit:'cover'}} />
+          <img src={avatarUrl} alt={character.name} style={{width:'100%',height:'100%',objectFit:'cover',objectPosition:'top center'}} />
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3" style={{ background: character.color + '15' }}>
             <div className="w-16 h-16 rounded-full flex items-center justify-center text-xl font-medium" style={{ background: character.color + '25', color: character.color }}>

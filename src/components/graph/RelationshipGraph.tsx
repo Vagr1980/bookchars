@@ -258,7 +258,7 @@ export default function RelationshipGraph({ characters, relationships }: Props) 
           .attr('x', cx - 25).attr('y', -25)
           .attr('width', 50).attr('height', 50)
           .attr('clip-path', `url(#${clipId})`)
-          .attr('preserveAspectRatio', 'xMidYMid slice')
+          .attr('preserveAspectRatio', 'xMidYMin slice')
       } else {
         el.append('text')
           .attr('x', cx).attr('y', 0)
