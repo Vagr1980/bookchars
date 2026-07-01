@@ -8,8 +8,9 @@ function getAdminClient() {
   return createSupabase(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 }
 
-const CHUNK = 8000
-const OVERLAP = 800
+// Groq free tier now limits to 6000 TPM — prompt ≈ 2500 tokens, so text chunk max ≈ 3000 tokens ≈ 3000 chars
+const CHUNK = 3000
+const OVERLAP = 300
 const MAX_CHUNKS = 8  // fallback: Groq chunked mode
 
 // ── MiMo V2.5 Pro (primary) ──────────────────────────────────────────────────
@@ -27,7 +28,7 @@ async function mimoCall(prompt: string): Promise<string> {
     body: JSON.stringify({
       model: MIMO_MODEL,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 6000,
+      max_tokens: 8000,
       temperature: 0.1,
     }),
   })
@@ -36,7 +37,14 @@ async function mimoCall(prompt: string): Promise<string> {
     throw new Error(`MiMo ${res.status}: ${err}`)
   }
   const data = await res.json()
-  return data?.choices?.[0]?.message?.content ?? ''
+  // Log structure for debugging if unexpected format
+  const content = data?.choices?.[0]?.message?.content
+  if (!content) {
+    console.error('[MiMo] unexpected response structure:', JSON.stringify(data).slice(0, 500))
+    throw new Error(`MiMo: пустой ответ. Структура: ${JSON.stringify(data).slice(0, 200)}`)
+  }
+  console.log('[MiMo] raw response preview:', content.slice(0, 300))
+  return content
 }
 
 // ── Groq (fallback) ───────────────────────────────────────────────────────────
@@ -343,7 +351,10 @@ ${text}`
 
   const raw = await mimoCall(prompt)
   const parsed = safeParseChunk(raw, 0)
-  if (!parsed) throw new Error('MiMo: не удалось разобрать ответ')
+  if (!parsed) {
+    console.error('[MiMo] parse failed. Raw response (first 1000):', raw.slice(0, 1000))
+    throw new Error('MiMo: не удалось разобрать ответ')
+  }
   console.log(`[analyze] MiMo extracted ${parsed.characters?.length ?? 0} characters, ${parsed.relationships?.length ?? 0} relationships`)
   return parsed
 }
