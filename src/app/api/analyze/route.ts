@@ -139,13 +139,14 @@ If a physical description or nickname matches an ALREADY FOUND character → use
 × Characters who appear only once to perform a single action (open a door, deliver a letter, announce a visitor)
 × Nameless passengers, bystanders, crowd members
 × "чиновник", "полковник", "генерал" WITHOUT a personal name, unless they are major plot characters
-━━━ WHO TO INCLUDE ━━━
-✓ Characters with a personal name (first name, surname, or both)
-✓ Characters with a title + name ("Князь Мышкин", "Генерал Епанчин")
-✓ Named animals and magical creatures in folk tales
-✓ Characters who appear in multiple scenes and affect the plot
-✓ The title character of the book ALWAYS, no matter what
-Extract ALL significant named characters from this fragment — do not skip anyone with a real name.
+━━━ WHO TO INCLUDE — strict threshold ━━━
+✓ Characters who SPEAK (have dialogue) in this fragment
+✓ Characters who are DESCRIBED IN DETAIL (appearance, emotions, thoughts, motivations)
+✓ Characters who ACTIVELY AFFECT THE PLOT in this fragment (not just mentioned)
+✓ The title character of the book ALWAYS
+✗ NEVER include characters who are only MENTIONED BY NAME in passing (e.g. "He thought of his friend Sidorov" → do NOT add Sidorov)
+✗ NEVER include characters you cannot describe with at least age + gender + one distinguishing feature
+Quality over quantity: 5 well-described characters are better than 15 vague ones.
 ━━━ ROLES — be strict ━━━
 protagonist: 1-3 main heroes the story centers on
 antagonist: 1-2 main villains/opposing forces
@@ -306,6 +307,8 @@ async function extractCharacters(text: string) {
   const first = results[0] || {}
   const charsByName = new Map<string, any>()
   const idRemaps: Map<string, string>[] = results.map(() => new Map())
+  // Track how many distinct chunks each character appears in
+  const charChunkCount = new Map<string, number>()
 
   for (let ri = 0; ri < results.length; ri++) {
     const r = results[ri]
@@ -330,6 +333,7 @@ async function extractCharacters(text: string) {
             appearance: (c.appearance?.length ?? 0) > (existingById.appearance?.length ?? 0) ? c.appearance : existingById.appearance,
           }
           charsByName.set(key, updated)
+          charChunkCount.set(existingById.id, (charChunkCount.get(existingById.id) || 1) + 1)
         }
         idRemaps[ri].set(c.id, existingById.id)
         continue
@@ -342,13 +346,40 @@ async function extractCharacters(text: string) {
         const canonical = { ...c, id: safeId }
         charsByName.set(key, canonical)
         idRemaps[ri].set(c.id, safeId)
+        charChunkCount.set(safeId, 1)
       } else {
-        idRemaps[ri].set(c.id, charsByName.get(key)!.id)
+        const existingId = charsByName.get(key)!.id
+        idRemaps[ri].set(c.id, existingId)
+        charChunkCount.set(existingId, (charChunkCount.get(existingId) || 1) + 1)
       }
     }
   }
 
   let allChars = Array.from(charsByName.values())
+
+  // Filter: remove single-mention "other" characters with vague/empty descriptions
+  // These are likely characters mentioned once in passing (Киндер, Трепалов, Бискуп etc.)
+  const VAGUE_DESC_PATTERNS = [
+    /неясными мотивами/i,
+    /^(мужчина|женщина|человек|персонаж)\s/i,
+    /мало|не(известно|ясно|понятно)/i,
+  ]
+  const beforeFilter = allChars.length
+  allChars = allChars.filter(c => {
+    if (c.role !== 'other') return true // keep all non-other roles
+    const chunkCount = charChunkCount.get(c.id) || 1
+    if (chunkCount >= 2) return true // appears in 2+ chunks → keep
+    const desc = (c.description || '') + (c.appearance || '')
+    const isVague = VAGUE_DESC_PATTERNS.some(p => p.test(desc)) || desc.length < 30
+    if (isVague) {
+      console.log(`[analyze] filtered single-mention vague character: "${c.name}"`)
+      return false
+    }
+    return true
+  })
+  if (beforeFilter !== allChars.length) {
+    console.log(`[analyze] filtered ${beforeFilter - allChars.length} single-mention minor characters`)
+  }
 
   // Пост-обработка: слияние дублей по подстроке имени
   // "Епанчина" ⊂ "генеральша Епанчина" → один персонаж
