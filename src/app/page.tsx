@@ -284,7 +284,7 @@ export default function HomePage() {
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-12 text-center">
             <div className="w-12 h-12 rounded-full border-2 border-purple-200 border-t-purple-600 animate-spin mx-auto mb-6" />
             <div className="text-base font-medium text-gray-800 dark:text-gray-200 mb-2">Анализирую книгу...</div>
-            <div className="text-sm text-gray-400">Claude извлекает персонажей и строит карту связей</div>
+            <div className="text-sm text-gray-400">MiMo извлекает персонажей и строит карту связей</div>
           </div>
         )}
       </div>
